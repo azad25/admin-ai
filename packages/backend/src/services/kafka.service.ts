@@ -1,4 +1,4 @@
-import { Kafka, Producer, Consumer, EachMessagePayload, KafkaConfig } from 'kafkajs';
+import { Kafka, Producer, Consumer, EachMessagePayload } from 'kafkajs';
 import { logger } from '../utils/logger';
 import { WebSocketService, getWebSocketService } from './websocket.service';
 import { AIMessage } from '@admin-ai/shared/src/types/ai';
@@ -28,24 +28,40 @@ export interface KafkaMessage {
   };
 }
 
+export type MessageHandler = (message: any) => Promise<void>;
+
 export class KafkaService {
+  private static instance: KafkaService;
   private kafka: Kafka;
   private producer: Producer;
   private consumers: Map<string, Consumer> = new Map();
+  private handlers: Map<string, MessageHandler> = new Map();
+  private isConnected = false;
   private wsService?: WebSocketService;
 
-  constructor() {
-    const config: KafkaConfig = {
-      clientId: process.env.KAFKA_CLIENT_ID || 'admin-ai',
+  private constructor() {
+    this.kafka = new Kafka({
+      clientId: 'admin-ai',
       brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
-      retry: {
-        initialRetryTime: 100,
-        retries: 5
-      }
-    };
+      ssl: process.env.KAFKA_SSL === 'true',
+      sasl: process.env.KAFKA_SASL_USERNAME ? {
+        mechanism: 'plain',
+        username: process.env.KAFKA_SASL_USERNAME,
+        password: process.env.KAFKA_SASL_PASSWORD || '',
+      } : undefined,
+    });
 
-    this.kafka = new Kafka(config);
-    this.producer = this.kafka.producer();
+    this.producer = this.kafka.producer({
+      allowAutoTopicCreation: true,
+      transactionTimeout: 30000,
+    });
+  }
+
+  public static getInstance(): KafkaService {
+    if (!KafkaService.instance) {
+      KafkaService.instance = new KafkaService();
+    }
+    return KafkaService.instance;
   }
 
   public setWebSocketService(wsService: WebSocketService) {
@@ -53,9 +69,10 @@ export class KafkaService {
     logger.info('WebSocket service set in KafkaService');
   }
 
-  async connect() {
+  public async connect(): Promise<void> {
     try {
       await this.producer.connect();
+      this.isConnected = true;
       logger.info('Connected to Kafka');
     } catch (error) {
       logger.error('Failed to connect to Kafka:', error);
@@ -63,12 +80,13 @@ export class KafkaService {
     }
   }
 
-  async disconnect() {
+  public async disconnect(): Promise<void> {
     try {
       await this.producer.disconnect();
       for (const consumer of this.consumers.values()) {
         await consumer.disconnect();
       }
+      this.isConnected = false;
       logger.info('Disconnected from Kafka');
     } catch (error) {
       logger.error('Failed to disconnect from Kafka:', error);
@@ -76,90 +94,101 @@ export class KafkaService {
     }
   }
 
-  async sendMessage(topic: string, message: KafkaMessage) {
+  public async publish(topic: string, message: any): Promise<void> {
+    if (!this.isConnected) {
+      throw new Error('Kafka service is not connected');
+    }
+
     try {
       await this.producer.send({
         topic,
         messages: [
           {
             value: JSON.stringify(message),
+            timestamp: Date.now().toString(),
           },
         ],
       });
-      logger.debug(`Sent message to topic ${topic}:`, message);
     } catch (error) {
-      logger.error(`Failed to send message to topic ${topic}:`, error);
+      logger.error(`Failed to publish message to topic ${topic}:`, error);
       throw error;
     }
   }
 
-  async subscribe(topic: string, groupId: string, callback?: (message: KafkaMessage) => Promise<void>) {
+  public async subscribe(
+    topic: string,
+    groupId: string,
+    handler: MessageHandler
+  ): Promise<void> {
+    if (this.consumers.has(topic)) {
+      throw new Error(`Already subscribed to topic ${topic}`);
+    }
+
     try {
-      const consumer = this.kafka.consumer({ groupId });
+      const consumer = this.kafka.consumer({
+        groupId,
+        maxWaitTimeInMs: 100,
+        retry: {
+          initialRetryTime: 100,
+          retries: 8
+        }
+      });
+
       await consumer.connect();
       await consumer.subscribe({ topic, fromBeginning: false });
 
+      this.handlers.set(topic, handler);
+      this.consumers.set(topic, consumer);
+
       await consumer.run({
-        eachMessage: async ({ message }: EachMessagePayload) => {
+        eachMessage: async (payload: EachMessagePayload) => {
           try {
-            const parsedMessage: KafkaMessage = JSON.parse(message.value?.toString() || '');
-            logger.info(`Received message from topic ${topic}:`, parsedMessage);
-
-            if (callback) {
-              await callback(parsedMessage);
+            const { topic, message } = payload;
+            const handler = this.handlers.get(topic);
+            
+            if (!handler) {
+              throw new Error(`No handler registered for topic ${topic}`);
             }
 
-            // Send real-time updates via WebSocket if userId is provided
-            if (parsedMessage.userId) {
-              const aiMessage: AIMessage = {
-                id: crypto.randomUUID(),
-                content: `New message received from ${topic}`,
-                role: 'system',
-                metadata: {
-                  type: 'notification',
-                  status: 'info',
-                  category: 'kafka',
-                  source: {
-                    page: 'System',
-                    controller: 'KafkaService',
-                    action: 'messageReceived',
-                    details: {
-                      topic,
-                      messageType: parsedMessage.type,
-                    },
-                  },
-                  timestamp: Date.now().toString(),
-                  read: false,
-                },
-              };
-              this.wsService?.sendToUser(parsedMessage.userId, aiMessage);
+            if (!message.value) {
+              logger.warn(`Received empty message on topic ${topic}`);
+              return;
             }
+
+            const parsedMessage = JSON.parse(message.value.toString());
+            await handler(parsedMessage);
           } catch (error) {
-            logger.error(`Failed to process message from topic ${topic}:`, error);
+            logger.error('Error processing Kafka message:', error);
           }
         },
       });
 
-      this.consumers.set(topic, consumer);
-      logger.info(`Subscribed to topic ${topic}`);
+      logger.info(`Subscribed to Kafka topic: ${topic}`);
     } catch (error) {
       logger.error(`Failed to subscribe to topic ${topic}:`, error);
       throw error;
     }
   }
 
-  async unsubscribe(topic: string) {
+  public async unsubscribe(topic: string): Promise<void> {
+    const consumer = this.consumers.get(topic);
+    if (!consumer) {
+      return;
+    }
+
     try {
-      const consumer = this.consumers.get(topic);
-      if (consumer) {
-        await consumer.disconnect();
-        this.consumers.delete(topic);
-        logger.info(`Unsubscribed from topic ${topic}`);
-      }
+      await consumer.disconnect();
+      this.consumers.delete(topic);
+      this.handlers.delete(topic);
+      logger.info(`Unsubscribed from Kafka topic: ${topic}`);
     } catch (error) {
       logger.error(`Failed to unsubscribe from topic ${topic}:`, error);
       throw error;
     }
+  }
+
+  public isReady(): boolean {
+    return this.isConnected;
   }
 
   // Helper method to create standard topics
@@ -202,16 +231,18 @@ export class KafkaService {
       return;
     }
     if (message.userId) {
+      const timestamp = Date.now().toString();
       this.wsService.sendToUser(message.userId, {
         id: crypto.randomUUID(),
         content: `AI Task ${message.type}: ${message.data?.taskName || 'Unknown task'}`,
         role: 'system',
+        timestamp,
         metadata: {
           type: 'notification',
           status: message.type === 'task_failed' ? 'error' : 'success',
           category: 'ai',
           source: message.metadata?.source,
-          timestamp: Date.now(),
+          timestamp,
           read: false
         }
       });
@@ -255,10 +286,12 @@ export class KafkaService {
   private async handleUserActivity(message: KafkaMessage) {
     // Handle user activity tracking
     if (message.userId) {
+      const timestamp = Date.now().toString();
       const aiMessage: AIMessage = {
         id: crypto.randomUUID(),
         content: `Activity tracked: ${message.type}`,
         role: 'system',
+        timestamp,
         metadata: {
           type: 'notification',
           status: 'info',
@@ -267,7 +300,7 @@ export class KafkaService {
             ...message.metadata?.source,
             details: message.data,
           },
-          timestamp: Date.now().toString(),
+          timestamp,
           read: false,
         },
       };
@@ -276,25 +309,26 @@ export class KafkaService {
   }
 
   private async handleNotification(message: KafkaMessage) {
-    // Handle general notifications
+    if (!this.wsService) {
+      logger.warn('WebSocket service not initialized, skipping notification');
+      return;
+    }
     if (message.userId) {
-      const aiMessage: AIMessage = {
+      const timestamp = Date.now().toString();
+      this.wsService.sendToUser(message.userId, {
         id: crypto.randomUUID(),
-        content: message.data.content,
+        content: message.data?.message || 'New notification',
         role: 'system',
+        timestamp,
         metadata: {
           type: 'notification',
-          status: message.data.status || 'info',
-          category: message.data.category || 'general',
-          source: {
-            ...message.metadata?.source,
-            details: message.data,
-          },
-          timestamp: Date.now().toString(),
-          read: false,
-        },
-      };
-      this.wsService?.sendToUser(message.userId, aiMessage);
+          status: message.data?.status || 'info',
+          category: message.data?.category || 'system',
+          source: message.metadata?.source,
+          timestamp,
+          read: false
+        }
+      });
     }
   }
 
@@ -347,7 +381,107 @@ export class KafkaService {
       throw error;
     }
   }
+
+  private createNotificationMessage(content: string, category: string, details: any, status: 'info' | 'success' | 'warning' | 'error' = 'info'): AIMessage {
+    const timestamp = Date.now().toString();
+    return {
+      id: crypto.randomUUID(),
+      content,
+      role: 'system',
+      timestamp,
+      metadata: {
+        type: 'notification',
+        status,
+        category,
+        source: {
+          page: 'System',
+          controller: 'KafkaService',
+          action: 'messageReceived',
+          details,
+        },
+        timestamp,
+        read: false,
+      },
+    };
+  }
+
+  private createErrorMessage(error: Error, category: string): AIMessage {
+    const timestamp = Date.now().toString();
+    return {
+      id: crypto.randomUUID(),
+      content: error.message,
+      role: 'system',
+      timestamp,
+      metadata: {
+        type: 'notification',
+        status: 'error',
+        category,
+        source: {
+          page: 'System',
+          controller: 'KafkaService',
+          action: 'error',
+          details: {
+            name: error.name,
+            stack: error.stack,
+          },
+        },
+        timestamp,
+        read: false,
+      },
+    };
+  }
+
+  private async sendWebSocketNotification(userId: string, topic: string, messageType: string) {
+    const timestamp = Date.now().toString();
+    const aiMessage: AIMessage = {
+      id: crypto.randomUUID(),
+      content: `New message received from ${topic}`,
+      role: 'system',
+      timestamp,
+      metadata: {
+        type: 'notification',
+        status: 'info',
+        category: 'kafka',
+        source: {
+          page: 'System',
+          controller: 'KafkaService',
+          action: 'messageReceived',
+          details: {
+            topic,
+            messageType,
+          },
+        },
+        timestamp,
+        read: false,
+      },
+    };
+    await this.wsService?.sendToUser(userId, aiMessage);
+  }
+
+  private async sendWebSocketError(userId: string, error: any) {
+    const timestamp = Date.now().toString();
+    const aiMessage: AIMessage = {
+      id: crypto.randomUUID(),
+      content: error.message || 'An error occurred while processing the message',
+      role: 'system',
+      timestamp,
+      metadata: {
+        type: 'notification',
+        status: 'error',
+        category: 'kafka',
+        source: {
+          page: 'System',
+          controller: 'KafkaService',
+          action: 'error',
+          details: error,
+        },
+        timestamp,
+        read: false,
+      },
+    };
+    await this.wsService?.sendToUser(userId, aiMessage);
+  }
 }
 
 // Export a singleton instance
-export const kafkaService = new KafkaService(); 
+export const kafkaService = KafkaService.getInstance(); 
