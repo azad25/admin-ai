@@ -1,0 +1,29 @@
+{
+  "name": "admin-ai",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"yarn workspace @admin-ai/frontend dev\" \"yarn workspace @admin-ai/backend dev\"",
+    "build": "yarn workspaces run build",
+    "test": "yarn workspaces run test",
+    "lint": "yarn workspaces run lint",
+    "clean": "yarn workspaces run clean",
+    "postinstall": "yarn workspace @admin-ai/shared build"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.3.3",
+    "@types/node": "^20.11.17"
+  },
+  "resolutions": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "@types/react": "18.2.55",
+    "@types/react-dom": "18.2.19",
+    "three": "0.161.0",
+    "@types/three": "0.161.2"
+  }
+}
