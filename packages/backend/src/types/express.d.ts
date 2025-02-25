@@ -1,9 +1,10 @@
 import { User } from '../database/entities/User';
+import { Request } from 'express';
 
 declare global {
   namespace Express {
     interface Request {
-      user: User;
+      user?: User;
       location?: {
         country: string;
         city: string;
@@ -14,6 +15,13 @@ declare global {
   }
 }
 
-export interface RequestWithUser extends Request {
-  user: User;
-} 
+// Extend the base Request type and make user property required
+export type RequestWithUser = Request & {
+  user: NonNullable<Express.Request['user']>;
+  location?: {
+    country: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+  };
+}; 
