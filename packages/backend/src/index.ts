@@ -1,3 +1,17 @@
+import * as dotenv from 'dotenv';
+import path from 'path';
+
+// Load environment variables from .env file FIRST, before any other imports
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+
+// Check required environment variables
+const requiredEnvVars = ['JWT_SECRET', 'PORT', 'NODE_ENV'];
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    throw new Error(`${envVar} environment variable is not set`);
+  }
+}
+
 import express from 'express';
 import { createServer } from 'http';
 import { logger } from './utils/logger';
@@ -13,7 +27,6 @@ import { MonitoringService } from './services/monitoring.service';
 import { CacheService } from './services/cache.service';
 import cors from 'cors';
 import helmet from 'helmet';
-import dotenv from 'dotenv';
 import { rateLimit } from 'express-rate-limit';
 import { errorHandler } from './middleware/errorHandler';
 import { requestTrackerMiddleware } from './middleware/requestTracker.middleware';
@@ -22,9 +35,6 @@ import { setupLogsDirectory } from './scripts/setupLogs';
 import { AppEngine } from './engine/AppEngine';
 import { AdminAI } from './core/AdminAI';
 import { setupDatabase } from './database';
-
-// Load environment variables
-dotenv.config();
 
 async function initializeLogging() {
   try {

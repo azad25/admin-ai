@@ -2,6 +2,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
 import { useNavigate, useLocation } from 'react-router-dom';
 import { authService } from '../services/auth';
 import { logger } from '../utils/logger';
+import { wsService } from '../services/websocket.service';
 
 export interface User {
   id: string;
@@ -42,40 +43,77 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const handleAuthStateChange = useCallback(async (token: string | null) => {
     try {
       if (!token) {
+        // Clear everything if no token
+        authService.setToken(null);
+        wsService.disconnect();
         setUser(null);
-        if (!location.pathname.match(/^\/(login|register)$/)) {
+        setError(null);
+        
+        // Only redirect if we're not already on an auth page and not in the initial loading state
+        if (!loading && !location.pathname.match(/^\/(login|register)$/)) {
           navigate('/login', { replace: true });
         }
         return;
       }
 
-      // Set token in localStorage and axios headers
-      localStorage.setItem('token', token);
+      // Set token in auth service first
+      authService.setToken(token);
       
-      // Get current user with the token
-      const user = await authService.getCurrentUser();
-      setUser(user);
+      try {
+        // Get current user with the token
+        const user = await authService.getCurrentUser();
+        setUser(user);
+        setError(null);
 
-      // If we're on the login page but already authenticated, redirect to home
-      if (location.pathname === '/login') {
-        navigate('/', { replace: true });
+        // Set up WebSocket with the token after user is confirmed
+        wsService.setToken(token);
+
+        // If we're on the login page but already authenticated, redirect to home
+        // Only redirect if we have a valid user and we're not in the process of refreshing
+        if (location.pathname === '/login' && user) {
+          navigate('/', { replace: true });
+        }
+      } catch (error: any) {
+        // Handle specific API errors
+        const message = error?.response?.data?.message || 'Authentication failed. Please log in again.';
+        logger.error('Authentication error:', error);
+        
+        // Only clear auth state and redirect if it's not a token refresh error
+        if (!error.response?.data?.refreshToken) {
+          setError(message);
+          authService.setToken(null);
+          wsService.disconnect();
+          setUser(null);
+          
+          // Only redirect if we're not already on an auth page
+          if (!location.pathname.match(/^\/(login|register)$/)) {
+            navigate('/login', { replace: true });
+          }
+        }
       }
-    } catch (error) {
+    } catch (error: any) {
       logger.error('Auth state change failed:', error);
+      const message = error?.response?.data?.message || 'An unexpected error occurred.';
+      setError(message);
+      
+      // Clear everything on error
+      authService.setToken(null);
+      wsService.disconnect();
       setUser(null);
-      localStorage.removeItem('token');
+      
+      // Only redirect if we're not already on an auth page
       if (!location.pathname.match(/^\/(login|register)$/)) {
         navigate('/login', { replace: true });
       }
     }
-  }, [navigate, location.pathname]);
+  }, [navigate, location.pathname, loading]);
 
   // Initial auth check
   useEffect(() => {
     const initAuth = async () => {
       try {
         setLoading(true);
-        const token = localStorage.getItem('token');
+        const token = authService.getToken();
         await handleAuthStateChange(token);
       } catch (error) {
         logger.error('Initial auth check failed:', error);
@@ -90,7 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Listen for storage events (token changes in other tabs)
   useEffect(() => {
     const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'token') {
+      if (e.key === 'auth_token') {
         handleAuthStateChange(e.newValue);
       }
     };
@@ -101,16 +139,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // Listen for auth error events
   useEffect(() => {
-    const handleAuthError = () => {
-      setUser(null);
-      setError('Your session has expired. Please log in again.');
-      if (!location.pathname.match(/^\/(login|register)$/)) {
-        navigate('/login', { replace: true });
+    const handleAuthError = (error: any) => {
+      // Only clear auth state if it's a fatal error
+      if (error?.message?.includes('Authentication failed') || error?.message?.includes('Token expired')) {
+        setUser(null);
+        setError('Your session has expired. Please log in again.');
+        if (!location.pathname.match(/^\/(login|register)$/)) {
+          navigate('/login', { replace: true });
+        }
+      } else {
+        // For other errors, just set the error message but don't log out
+        setError(error?.message || 'Connection error. Please try again.');
       }
     };
 
-    window.addEventListener('auth-error', handleAuthError);
-    return () => window.removeEventListener('auth-error', handleAuthError);
+    wsService.on('error', handleAuthError);
+    return () => wsService.off('error', handleAuthError);
   }, [navigate, location.pathname]);
 
   const login = async (email: string, password: string) => {
@@ -118,23 +162,32 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       setError(null);
       
-      // Clear any existing token before attempting login
-      localStorage.removeItem('token');
-      
+      // First get the login response
       const response = await authService.login({ email, password });
       
       if (!response.token || !response.user) {
-        throw new Error('Invalid response from server');
+        setError('Invalid response from server');
+        return;
       }
       
-      // Let handleAuthStateChange handle token storage and user state
-      await handleAuthStateChange(response.token);
+      // Set token first
+      authService.setToken(response.token);
+      
+      // Set user state
+      setUser(response.user);
+      
+      // Connect WebSocket with new token
+      wsService.connect();
+      
+      // Navigate to home
+      navigate('/', { replace: true });
     } catch (error: any) {
-      setUser(null);
-      localStorage.removeItem('token');
       const message = error?.response?.data?.message || 'Login failed. Please check your credentials.';
       setError(message);
-      throw error;
+      // Clear everything on error
+      authService.setToken(null);
+      wsService.disconnect();
+      setUser(null);
     } finally {
       setLoading(false);
     }
@@ -147,8 +200,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (error) {
       logger.error('Logout failed:', error);
     } finally {
-      localStorage.removeItem('token');
-      await handleAuthStateChange(null);
+      setError(null);
+      authService.setToken(null);
+      wsService.disconnect();
+      setUser(null);
+      navigate('/login', { replace: true });
       setLoading(false);
     }
   };
@@ -158,7 +214,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(true);
       setError(null);
       const response = await authService.register({ email, password, name });
-      localStorage.setItem('token', response.token);
       await handleAuthStateChange(response.token);
     } catch (error: any) {
       const message = error?.response?.data?.message || 'Registration failed. Please try again.';

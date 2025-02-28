@@ -3,7 +3,7 @@ import { logger } from '../utils/logger';
 
 // Configure axios instance
 export const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000/api',  // Point to backend server
+  baseURL: (import.meta.env.VITE_API_URL || 'http://localhost:3000') + '/api',  // Ensure /api prefix
   headers: {
     'Content-Type': 'application/json',
     'Accept': 'application/json'
@@ -15,7 +15,7 @@ export const api = axios.create({
 // Add request interceptor for authentication
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = localStorage.getItem('auth_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
       logger.debug('Adding auth token to request');
@@ -60,7 +60,7 @@ api.interceptors.response.use(
 
       // For 401 errors, remove the token and trigger a custom event
       if (error.response.status === 401) {
-        localStorage.removeItem('token');
+        localStorage.removeItem('auth_token');
         window.dispatchEvent(new Event('auth-error'));
       }
     } else if (error.request) {

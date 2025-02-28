@@ -42,7 +42,7 @@ export const authService = {
 
   async getCurrentUser(): Promise<User> {
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('auth_token');
       if (!token) {
         throw new Error('No authentication token found');
       }
@@ -93,7 +93,7 @@ export const authService = {
 
   async logout(): Promise<void> {
     try {
-      const token = localStorage.getItem('token');
+      const token = localStorage.getItem('auth_token');
       if (token) {
         await api.post('/auth/logout');
       }
@@ -104,7 +104,7 @@ export const authService = {
         message: error?.message
       });
     } finally {
-      localStorage.removeItem('token');
+      localStorage.removeItem('auth_token');
     }
   },
 
@@ -145,5 +145,18 @@ export const authService = {
       });
       throw error;
     }
+  },
+
+  // Token management
+  setToken(token: string | null) {
+    if (token) {
+      localStorage.setItem('auth_token', token);
+    } else {
+      localStorage.removeItem('auth_token');
+    }
+  },
+
+  getToken(): string | null {
+    return localStorage.getItem('auth_token');
   }
 }; 

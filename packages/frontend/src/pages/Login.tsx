@@ -9,6 +9,7 @@ import {
   Container,
   Alert,
   CircularProgress,
+  Divider,
 } from '@mui/material';
 import { Link as RouterLink, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
@@ -38,6 +39,11 @@ export default function Login() {
       setError(errorMessage);
       console.error('Login error:', err);
     }
+  };
+
+  const fillAdminCredentials = () => {
+    setEmail('admin@admin.ai');
+    setPassword('admin123');
   };
 
   return (
@@ -111,6 +117,16 @@ export default function Login() {
               ) : (
                 'Sign In'
               )}
+            </Button>
+            <Divider sx={{ my: 2 }}>or</Divider>
+            <Button
+              fullWidth
+              variant="outlined"
+              onClick={fillAdminCredentials}
+              disabled={loading}
+              sx={{ mb: 2, height: 48 }}
+            >
+              Fill Admin Login
             </Button>
             <Box sx={{ textAlign: 'center' }}>
               <Link component={RouterLink} to="/register" variant="body2">

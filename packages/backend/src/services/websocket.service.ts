@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io';
+import { ExtendedError } from 'socket.io/dist/namespace';
 import { logger } from '../utils/logger';
 import { verifyToken } from '../utils/auth';
 import { AIMessage, AIMessageMetadata } from '@admin-ai/shared/src/types/ai';
@@ -6,6 +7,18 @@ import { MonitoringService } from './monitoring.service';
 import { ErrorLog, SystemHealth, SystemMetrics } from '../types/metrics';
 import { AIService } from './ai.service';
 import { EventEmitter } from 'events';
+import { AppError } from '../middleware/errorHandler';
+
+interface TokenRefreshError extends AppError {
+  refreshToken?: string;
+}
+
+type SocketMiddleware = (socket: Socket, next: (err?: Error) => void) => void;
+
+interface WebSocketEvents {
+  connected: void;
+  disconnected: void;
+}
 
 export class WebSocketService extends EventEmitter {
   private static instance: WebSocketService;
@@ -38,7 +51,7 @@ export class WebSocketService extends EventEmitter {
         this.isConnected = true;
         logger.info('WebSocket service is connected');
         try {
-          this.emit('connected');
+          super.emit('connected');
         } catch (error) {
           logger.error('Failed to emit connected event:', error);
         }
@@ -48,7 +61,7 @@ export class WebSocketService extends EventEmitter {
         this.isConnected = false;
         logger.error('WebSocket service connection lost:', error);
         try {
-          this.emit('disconnected');
+          super.emit('disconnected');
         } catch (error) {
           logger.error('Failed to emit disconnected event:', error);
         }
@@ -138,26 +151,44 @@ export class WebSocketService extends EventEmitter {
   private setupEventHandlers(): void {
     if (!this.io) return;
 
-    this.io.use(async (socket, next) => {
+    // Define the authentication middleware
+    const authMiddleware: SocketMiddleware = async (socket, next) => {
       try {
         const token = socket.handshake.auth.token;
         if (!token) {
           logger.warn('Authentication failed: No token provided');
-          return next(new Error('Authentication error: No token provided'));
+          next(new Error('Authentication error: No token provided'));
+          return;
         }
 
-        const decoded = await verifyToken(token);
-        socket.data.userId = decoded.userId;
-        logger.debug('Socket authenticated successfully', {
-          socketId: socket.id,
-          userId: decoded.userId
-        });
-        next();
+        try {
+          const decoded = await verifyToken(token);
+          socket.data.userId = decoded.userId;
+          logger.debug('Socket authenticated successfully', {
+            socketId: socket.id,
+            userId: decoded.userId
+          });
+          next();
+        } catch (error: any) {
+          if (error instanceof AppError && 'refreshToken' in error) {
+            const refreshError = error as TokenRefreshError;
+            // Send the refresh token back to the client
+            socket.emit('token:refresh', { token: refreshError.refreshToken });
+            // Allow the connection but client should reconnect with new token
+            socket.data.userId = refreshError.refreshToken;
+            next();
+          } else {
+            logger.error('Socket authentication error:', error);
+            next(new Error('Authentication error: Invalid token'));
+          }
+        }
       } catch (error) {
-        logger.error('Socket authentication error:', error);
-        next(new Error('Authentication error: Invalid token'));
+        logger.error('Socket middleware error:', error);
+        next(new Error('Authentication error: Server error'));
       }
-    });
+    };
+
+    this.io.use(authMiddleware);
 
     this.io.on('connection', (socket: Socket) => {
       const userId = socket.data.userId;
