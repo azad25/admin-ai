@@ -435,7 +435,7 @@ export class AISettingsService extends EventEmitter {
     }
   }
 
-  private async initialize() {
+  public async initialize(): Promise<void> {
     if (this.initialized) {
       logger.info('AISettingsService already initialized');
       return;
@@ -447,6 +447,15 @@ export class AISettingsService extends EventEmitter {
         this.initializationPromise = new Promise((resolve) => {
           this.readyResolve = resolve;
         });
+      }
+
+      // Verify database connection first
+      try {
+        await AppDataSource.query('SELECT 1');
+        logger.info('Database connection verified for AISettingsService');
+      } catch (error) {
+        logger.error('Database connection failed for AISettingsService:', error);
+        throw new Error('Database connection required for AISettingsService initialization');
       }
 
       // Ensure repository connection
@@ -493,11 +502,6 @@ export class AISettingsService extends EventEmitter {
 
     } catch (error) {
       logger.error('Failed to initialize AISettingsService:', error);
-      // On error, mark as initialized only if we don't have active providers
-      if (!this.hasActiveProviders) {
-        this.initialized = true;
-        this.readyResolve();
-      }
       throw error;
     }
   }
@@ -566,26 +570,28 @@ export class AISettingsService extends EventEmitter {
     }
   }
 
-  async getAllProviderSettings(userId: string): Promise<AIProviderConfig[]> {
+  async getAllProviderSettings(userId?: string): Promise<AIProviderConfig[]> {
     try {
       await this.initialize();
       logger.info('Getting all provider settings', { userId });
 
-      // Get settings for the specific user
-      const settings = await this.aiSettingsRepository.findOne({
-        where: { userId }
-      });
+      // Get settings for the specific user or all settings if no userId provided
+      const query = userId 
+        ? { where: { userId } }
+        : {};
 
-      if (!settings) {
+      const settings = await this.aiSettingsRepository.find(query);
+
+      if (!settings || settings.length === 0) {
         return [];
       }
 
       // Return the providers array with masked API keys
-      const providers = settings.providers || [];
-      return providers.map(provider => ({
-        ...provider,
-        apiKey: '********' // Mask API keys for security
-      }));
+      const providers = settings.flatMap(setting => setting.providers || [])
+        .map(provider => ({
+          ...provider,
+          apiKey: '********' // Mask API keys for security
+        }));
 
       logger.info('Retrieved provider settings', {
         userId,
@@ -603,8 +609,8 @@ export class AISettingsService extends EventEmitter {
       this.hasActiveProviders = providers.some(p => p.isVerified && p.isActive);
       
       // If we have active providers, ensure we broadcast the status
-      if (this.hasActiveProviders) {
-        this.broadcastStatus();
+      if (this.hasActiveProviders && this.wsService?.isInitialized()) {
+        await this.broadcastStatus();
       }
 
       return providers;

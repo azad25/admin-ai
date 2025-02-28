@@ -99,10 +99,14 @@ export interface AICommand {
 }
 
 export interface AISystemStatus {
-  activeConnections: number;
-  databaseSize: string;
-  tableCounts: Record<string, number>;
-  lastUpdated: Date;
+  ready: boolean;
+  connected: boolean;
+  initialized: boolean;
+  hasProviders: boolean;
+  activeProviders: Array<{
+    provider: string;
+    model: string;
+  }>;
 }
 
 export interface AISettings {
@@ -127,4 +131,44 @@ export interface AIAnalysisResult {
   recommendations: string[];
   confidence: number;
   details: Record<string, any>;
+}
+
+export type ResourceStatus = 'critical' | 'warning' | 'normal';
+
+export interface SystemMetrics {
+  cpuUsage: number;
+  memoryUsage: number;
+  diskUsage?: number;
+  errorCount: number;
+  totalRequests: number;
+  activeUsers: number;
+  cpu?: {
+    usage: number;
+    status: ResourceStatus;
+    trend: 'up' | 'down' | 'stable';
+    recommendations: string[];
+  };
+  memory?: {
+    usage: number;
+    status: ResourceStatus;
+    trend: 'up' | 'down' | 'stable';
+    recommendations: string[];
+  };
+  disk?: {
+    usage: number;
+    status: ResourceStatus;
+  };
+}
+
+export interface RequestMetric {
+  timestamp: string;
+  method: string;
+  path: string;
+  statusCode: number;
+  responseTime: number;
+  location: {
+    country: string;
+    city: string;
+  };
+  duration: number;
 } 

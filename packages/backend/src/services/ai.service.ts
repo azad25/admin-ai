@@ -9,96 +9,33 @@ import {
   AIProviderConfig,
   AISettings,
   AISystemStatus,
-  LLMProvider
+  LLMProvider,
+  SystemMetrics,
+  ResourceStatus,
+  RequestMetric
 } from '@admin-ai/shared/src/types/ai';
 import { randomUUID } from 'crypto';
 import { WebSocketService, getWebSocketService } from './websocket.service';
 import { AISettingsService } from './aiSettings.service';
 import { AppError } from '../utils/error';
 import { EventEmitter } from 'events';
-import { SystemMetrics } from '../database/entities/SystemMetrics';
-import { RequestMetric } from '../types/metrics';
 
 const aiSettingsRepository = AppDataSource.getRepository('AISettings');
 
-const genAI = new GoogleGenerativeAI(process.env.GOOGLE_AI_API_KEY || '');
-
-// Configure safety settings
-const safetySettings = [
-  {
-    category: HarmCategory.HARM_CATEGORY_HARASSMENT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-  {
-    category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-    threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
-  },
-];
-
-// Initialize the model
-const model = genAI.getGenerativeModel({
-  model: 'gemini-pro',
-  safetySettings,
-});
-
-interface AIMessageMetadata {
-  type: 'chat' | 'notification' | 'system' | 'command';
-  timestamp: string;
-  provider?: string;
-  model?: string;
-  read: boolean;
-  category?: string;
-  source?: {
-    page: string;
-    controller: string;
-    action: string;
-    details?: Record<string, any>;
-  };
-  status?: string;
-  error?: string;
-}
-
-interface FunctionCall {
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-interface AIRequest {
-  type: string;
-  input: any;
-  metadata?: Record<string, any>;
-}
-
-interface AIResponse {
-  type: string;
-  output: any;
-  metadata?: Record<string, any>;
-}
-
-interface AIAction {
-  action: string;
-  params: any;
-  result: any;
-}
-
 interface PathStats {
-  total: number;
+  path: string;
+  count: number;
+  avgResponseTime: number;
   errors: number;
+  total: number;
 }
 
 interface EndpointStats {
-  duration: number;
+  endpoint: string;
   count: number;
+  avgResponseTime: number;
+  errors: number;
+  duration: number;
 }
 
 export class AIService extends EventEmitter {
@@ -108,6 +45,24 @@ export class AIService extends EventEmitter {
   private gemini?: GoogleGenerativeAI;
   private anthropic?: Anthropic;
   private isReady: boolean = false;
+  private safetySettings = [
+    {
+      category: HarmCategory.HARM_CATEGORY_HARASSMENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+    {
+      category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+      threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE,
+    },
+  ];
 
   constructor() {
     super();
@@ -125,7 +80,11 @@ export class AIService extends EventEmitter {
     systemCommands: []
   };
 
-  private llmClients: Record<LLMProvider, OpenAI | GoogleGenerativeAI | Anthropic | undefined> = {
+  private llmClients: {
+    openai: OpenAI | undefined;
+    gemini: GenerativeModel | undefined;
+    anthropic: Anthropic | undefined;
+  } = {
     openai: undefined,
     gemini: undefined,
     anthropic: undefined
@@ -187,6 +146,7 @@ Generate a response that:
           id: crypto.randomUUID(),
           content: aiResponse,
           role: 'assistant',
+          timestamp: new Date().toISOString(),
           metadata: {
             type: 'notification',
             status,
@@ -229,7 +189,8 @@ Generate a response that:
     );
   }
 
-  private async getActiveProvider(userId: string) {
+  private async getActiveProvider(userId: string | undefined): Promise<AIProviderConfig | undefined> {
+    if (!userId) return undefined;
     const providers = await this.aiSettingsService.getAllProviderSettings(userId);
     return providers.find(p => p.isActive);
   }
@@ -239,6 +200,7 @@ Generate a response that:
       id: randomUUID(),
       content,
       role: 'system',
+      timestamp: new Date().toISOString(),
       metadata: {
         type: 'notification',
         status,
@@ -255,16 +217,36 @@ Generate a response that:
   }
 
   private async initializeClient(provider: LLMProvider, apiKey: string): Promise<void> {
-    switch (provider) {
-      case 'openai':
-        this.llmClients.openai = new OpenAI({ apiKey });
-        break;
-      case 'gemini':
-        this.llmClients.gemini = new GoogleGenerativeAI(apiKey);
-        break;
-      case 'anthropic':
-        this.llmClients.anthropic = new Anthropic({ apiKey });
-        break;
+    try {
+      logger.info(`Initializing ${provider} client...`);
+      
+      switch (provider) {
+        case 'openai':
+          this.llmClients.openai = new OpenAI({ apiKey });
+          break;
+        case 'gemini':
+          const genAI = new GoogleGenerativeAI(apiKey);
+          const model = genAI.getGenerativeModel({
+            model: 'gemini-2.0-flash',
+            safetySettings: this.safetySettings,
+            generationConfig: {
+              temperature: 0.7,
+              topK: 40,
+              topP: 0.95,
+              maxOutputTokens: 2048
+            }
+          });
+          this.llmClients.gemini = model;
+          break;
+        case 'anthropic':
+          this.llmClients.anthropic = new Anthropic({ apiKey });
+          break;
+      }
+      
+      logger.info(`Successfully initialized ${provider} client`);
+    } catch (error) {
+      logger.error(`Failed to initialize ${provider} client:`, error);
+      throw error;
     }
   }
 
@@ -290,7 +272,7 @@ Generate a response that:
           break;
 
         case 'gemini':
-          availableModels = ['gemini-pro'];
+          availableModels = ['gemini-2.0-flash'];
           break;
 
         case 'anthropic':
@@ -359,9 +341,10 @@ Generate a response that:
       id: randomUUID(),
       content,
       role,
+      timestamp: new Date().toISOString(),
       metadata: {
         type: 'chat',
-        model: typeof model === 'string' ? model : undefined,
+        model: undefined,
         timestamp: new Date().toISOString(),
         read: false
       }
@@ -389,18 +372,14 @@ Generate a response that:
         await this.initializeClient(provider, apiKey);
       }
 
-      const client = this.llmClients[provider as keyof typeof this.llmClients];
-
-      if (!client) {
-        throw new Error(`No client initialized for provider ${provider}`);
-      }
-
       let response: AIMessage;
 
       switch (provider) {
         case 'openai': {
-          const openai = client as OpenAI;
-          const completion = await openai.chat.completions.create({
+          if (!this.llmClients.openai) {
+            throw new Error('OpenAI client not initialized');
+          }
+          const completion = await this.llmClients.openai.chat.completions.create({
             model: selectedModel,
             messages: [
               {
@@ -415,6 +394,7 @@ Generate a response that:
             id: randomUUID(),
             role: 'assistant',
             content: completion.choices[0]?.message?.content || 'No response generated',
+            timestamp: new Date().toISOString(),
             metadata: {
               type: 'chat',
               source: {
@@ -431,15 +411,17 @@ Generate a response that:
         }
 
         case 'gemini': {
-          const genAI = client as GoogleGenerativeAI;
-          const model = genAI.getGenerativeModel({ model: selectedModel });
-          const result = await model.generateContent(message.content);
+          if (!this.llmClients.gemini) {
+            throw new Error('Gemini client not initialized');
+          }
+          const result = await this.llmClients.gemini.generateContent(message.content);
           const text = result.response.text();
 
           response = {
             id: randomUUID(),
             role: 'assistant',
             content: text,
+            timestamp: new Date().toISOString(),
             metadata: {
               type: 'chat',
               source: {
@@ -447,17 +429,20 @@ Generate a response that:
                 controller: 'AIService',
                 action: 'processMessage'
               },
-              model: typeof selectedModel === 'string' ? selectedModel : selectedModel?.modelName || undefined,
+              model: selectedModel || 'gemini-2.0-flash',
               timestamp: new Date().toISOString(),
-              read: false
+              read: false,
+              provider: 'gemini'
             }
           };
           break;
         }
 
         case 'anthropic': {
-          const anthropic = client as Anthropic;
-          const result = await anthropic.messages.create({
+          if (!this.llmClients.anthropic) {
+            throw new Error('Anthropic client not initialized');
+          }
+          const result = await this.llmClients.anthropic.messages.create({
             model: selectedModel || 'claude-3-sonnet-20240229',
             max_tokens: 1000,
             messages: [
@@ -475,6 +460,7 @@ Generate a response that:
             id: randomUUID(),
             role: 'assistant',
             content: content || 'No response generated',
+            timestamp: new Date().toISOString(),
             metadata: {
               type: 'chat',
               source: {
@@ -515,6 +501,7 @@ Generate a response that:
       id: randomUUID(),
       content: `Executing command: ${command}`,
       role: 'system',
+      timestamp: new Date().toISOString(),
       metadata: {
         type: 'command',
         command,
@@ -526,22 +513,47 @@ Generate a response that:
     return message;
   }
 
-  async getSystemStatus(): Promise<AISystemStatus> {
-    const providers = await this.aiSettingsService.getAllProviderSettings();
-    const activeProviders = providers
-      .filter(p => p.isActive && p.isVerified)
-      .map(p => ({
-        provider: p.provider,
-        model: p.selectedModel || 'default'
-      }));
+  async getSystemStatus(userId?: string): Promise<AISystemStatus> {
+    try {
+      const providers = await this.aiSettingsService.getAllProviderSettings(userId ?? '');
+      const activeProviders = providers
+        .filter(p => p.isActive && p.isVerified)
+        .map(p => ({
+          provider: p.provider,
+          model: p.selectedModel || 'default'
+        }));
 
-    return {
-      ready: this.isReady,
-      connected: this.wsService?.getConnectionStatus() || false,
-      initialized: true,
-      hasProviders: activeProviders.length > 0,
-      activeProviders
-    };
+      const hasActiveProviders = activeProviders.length > 0;
+      const wsInitialized = this.wsService?.isInitialized() || false;
+      const wsConnected = this.wsService?.getConnectionStatus() || false;
+
+      const isReady = !hasActiveProviders || (hasActiveProviders && wsInitialized && wsConnected);
+
+      const status: AISystemStatus = {
+        ready: isReady,
+        connected: wsConnected,
+        initialized: wsInitialized,
+        hasProviders: hasActiveProviders,
+        activeProviders
+      };
+
+      logger.info('AI system status:', {
+        ...status,
+        wsService: !!this.wsService,
+        isReady: this.isReady
+      });
+
+      return status;
+    } catch (error) {
+      logger.error('Failed to get system status:', error);
+      return {
+        ready: false,
+        connected: false,
+        initialized: false,
+        hasProviders: false,
+        activeProviders: []
+      };
+    }
   }
 
   getSettings(): AISettings {
@@ -552,27 +564,30 @@ Generate a response that:
     this.settings = { ...this.settings, ...settings };
   }
 
-  async generateSchema(description: string): Promise<Record<string, unknown>> {
+  async generateSchema(input: string): Promise<any> {
     try {
-      const prompt = `Generate a JSON schema for a database table based on this description: "${description}". 
-        Include appropriate field types, validations, and relationships. 
-        Return only the JSON schema object without any explanation.`;
+      const settings = await aiSettingsRepository.findOne({
+        where: { isActive: true }
+      });
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
+      if (!settings) {
+        throw new Error('No active AI provider configured');
+      }
 
-      // Parse the response as JSON
-      return JSON.parse(text);
+      const { provider } = settings;
+      
+      if (provider === 'gemini') {
+        return await this.generateContent(input).then(JSON.parse);
+      }
+
+      throw new Error('Unsupported provider for schema generation');
     } catch (error) {
       logger.error('Error generating schema:', error);
-      throw new Error('Failed to generate schema');
+      throw error;
     }
   }
 
-  async generateCrudConfig(
-    schema: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
+  async generateCrudConfig(schema: Record<string, unknown>): Promise<Record<string, unknown>> {
     try {
       const prompt = `Given this database schema: ${JSON.stringify(schema)},
         generate a CRUD page configuration including:
@@ -582,12 +597,7 @@ Generate a response that:
         - Searchable fields
         Return only the JSON configuration object without any explanation.`;
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-
-      // Parse the response as JSON
-      return JSON.parse(text);
+      return await this.generateContent(prompt).then(JSON.parse);
     } catch (error) {
       logger.error('Error generating CRUD config:', error);
       throw new Error('Failed to generate CRUD configuration');
@@ -604,21 +614,14 @@ Generate a response that:
         - Recommendations
         Return the analysis as a JSON object without any explanation.`;
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-
-      // Parse the response as JSON
-      return JSON.parse(text);
+      return await this.generateContent(prompt).then(JSON.parse);
     } catch (error) {
       logger.error('Error analyzing data:', error);
       throw new Error('Failed to analyze data');
     }
   }
 
-  async generateDashboardSuggestions(
-    data: unknown[]
-  ): Promise<Record<string, unknown>> {
+  async generateDashboardSuggestions(data: unknown[]): Promise<Record<string, unknown>> {
     try {
       const prompt = `Given this dataset: ${JSON.stringify(data)},
         suggest dashboard widgets that would be useful for visualization.
@@ -628,12 +631,7 @@ Generate a response that:
         - Layouts
         Return only the JSON configuration object without any explanation.`;
 
-      const result = await model.generateContent(prompt);
-      const response = await result.response;
-      const text = response.text();
-
-      // Parse the response as JSON
-      return JSON.parse(text);
+      return await this.generateContent(prompt).then(JSON.parse);
     } catch (error) {
       logger.error('Error generating dashboard suggestions:', error);
       throw new Error('Failed to generate dashboard suggestions');
@@ -647,40 +645,132 @@ Generate a response that:
     }
 
     try {
-      logger.info('Initializing AI service...');
-      await this.setupAIComponents();
-      this.isReady = true;
+      logger.info('Starting AI service initialization...');
       
-      // Broadcast initial status
-      if (this.wsService) {
-        const status = await this.getSystemStatus();
-        this.wsService.broadcast('ai:status', status);
-        this.wsService.broadcast('ai:ready', { ready: true });
+      // Verify database connection first
+      try {
+        await AppDataSource.query('SELECT 1');
+        logger.info('Database connection verified for AI service');
+      } catch (error) {
+        logger.error('Database connection failed for AI service:', error);
+        throw new Error('Database connection required for AI service initialization');
       }
 
-      logger.info('AI service initialized successfully');
+      // Initialize settings service first
+      await this.aiSettingsService.initialize();
+      logger.info('AI settings service initialized');
+      
+      // Wait for settings service to be ready
+      await this.aiSettingsService.waitForReady();
+      logger.info('AI settings service is ready');
+      
+      // Setup AI components
+      await this.setupAIComponents();
+      logger.info('AI components setup completed');
+
+      // Wait for WebSocket service if we have active providers
+      const providers = await this.aiSettingsService.getAllProviderSettings();
+      const hasActiveProviders = providers.some(p => p.isActive && p.isVerified);
+
+      logger.info('Checking WebSocket requirements', {
+        hasActiveProviders,
+        wsServiceAvailable: !!this.wsService
+      });
+
+      if (hasActiveProviders) {
+        if (!this.wsService) {
+          logger.warn('WebSocket service not available but required for active providers');
+          return;
+        }
+
+        // Wait for WebSocket to be ready with a timeout
+        const wsTimeout = 10000; // 10 seconds
+        logger.info('Waiting for WebSocket service to be ready...');
+        
+        const wsReady = await Promise.race([
+          new Promise<boolean>(resolve => {
+            const checkWs = () => {
+              if (this.wsService?.isInitialized()) {
+                resolve(true);
+              }
+            };
+            const interval = setInterval(checkWs, 100);
+            setTimeout(() => {
+              clearInterval(interval);
+              resolve(false);
+            }, wsTimeout);
+          }),
+          new Promise<boolean>(resolve => setTimeout(() => resolve(false), wsTimeout))
+        ]);
+
+        if (!wsReady) {
+          logger.error('WebSocket service failed to initialize within timeout');
+          return;
+        }
+        
+        logger.info('WebSocket service is ready');
+      }
+      
+      // Mark as ready
+      this.isReady = true;
+      logger.info('AI service is ready');
+      
+      // Broadcast initial status
+      if (this.wsService?.isInitialized()) {
+        const status = await this.getSystemStatus();
+        this.wsService.broadcast('ai:status', status);
+        if (status.ready) {
+          this.wsService.broadcast('ai:ready', { ready: true });
+        }
+        logger.info('Broadcasted initial status', status);
+      }
+
+      logger.info('AI service initialization completed successfully', {
+        isReady: this.isReady,
+        hasActiveProviders,
+        wsInitialized: this.wsService?.isInitialized() || false
+      });
     } catch (error) {
       logger.error('Failed to initialize AI service:', error);
+      this.isReady = false;
       throw error;
     }
   }
 
   private async setupAIComponents(): Promise<void> {
     try {
+      logger.info('Starting AI components setup...');
+      
       // Wait for settings service to be ready
       await this.aiSettingsService.waitForReady();
+      logger.info('AI settings service is ready');
       
       // Get active provider settings
       const providers = await this.aiSettingsService.getAllProviderSettings();
+      logger.info('Retrieved provider settings', {
+        totalProviders: providers.length,
+        activeProviders: providers.filter(p => p.isActive && p.isVerified).length
+      });
       
       // Initialize each provider client
       for (const provider of providers) {
-        if (provider.isActive && provider.isVerified) {
-          await this.initializeClient(provider.provider, provider.apiKey);
+        try {
+          if (provider.isActive && provider.isVerified) {
+            logger.info(`Initializing provider ${provider.provider}`);
+            
+            // Decrypt the API key before initializing
+            const decryptedKey = decrypt(provider.apiKey);
+            await this.initializeClient(provider.provider, decryptedKey);
+            
+            logger.info(`Successfully initialized ${provider.provider} client`);
+          }
+        } catch (error) {
+          logger.error(`Failed to initialize provider ${provider.provider}:`, error);
+          // Continue with other providers even if one fails
         }
       }
 
-      logger.info('AI components setup completed');
+      logger.info('AI components setup completed successfully');
     } catch (error) {
       logger.error('Failed to setup AI components:', error);
       throw error;
@@ -782,11 +872,28 @@ Generate a response that:
 
   public async analyzeMetrics(metrics: SystemMetrics) {
     try {
+      // Return basic metrics if service is not ready
+      if (!this.isReady || !this.llmClients.gemini) {
+        return {
+          performance: {
+            cpuAnalysis: this.analyzeCPUUsageBasic(metrics.cpuUsage),
+            memoryAnalysis: this.analyzeMemoryUsageBasic(metrics.memoryUsage),
+            recommendations: this.generateBasicRecommendations(metrics)
+          },
+          trends: {
+            requests: this.analyzeRequestTrends(metrics),
+            errors: this.analyzeErrorTrends(metrics),
+            usage: this.analyzeUsageTrends(metrics)
+          }
+        };
+      }
+
+      // Full analysis with AI if service is ready
       return {
         performance: {
-          cpuAnalysis: this.analyzeCPUUsage(metrics.cpuUsage),
-          memoryAnalysis: this.analyzeMemoryUsage(metrics.memoryUsage),
-          recommendations: this.generatePerformanceRecommendations(metrics)
+          cpuAnalysis: await this.analyzeCPUUsage(metrics.cpuUsage),
+          memoryAnalysis: await this.analyzeMemoryUsage(metrics.memoryUsage),
+          recommendations: await this.generatePerformanceRecommendations(metrics)
         },
         trends: {
           requests: this.analyzeRequestTrends(metrics),
@@ -796,184 +903,41 @@ Generate a response that:
       };
     } catch (error) {
       logger.error('Failed to analyze metrics:', error);
-      throw new AppError(500, 'Failed to analyze metrics');
-    }
-  }
-
-  public async analyzeRequestMetrics(metrics: RequestMetric[]) {
-    try {
+      // Fallback to basic analysis on error
       return {
-        patterns: this.analyzeRequestPatterns(metrics),
-        performance: this.analyzeResponseTimes(metrics),
-        locations: this.analyzeGeographicDistribution(metrics),
-        recommendations: this.generateRequestOptimizations(metrics)
+        performance: {
+          cpuAnalysis: this.analyzeCPUUsageBasic(metrics.cpuUsage),
+          memoryAnalysis: this.analyzeMemoryUsageBasic(metrics.memoryUsage),
+          recommendations: this.generateBasicRecommendations(metrics)
+        },
+        trends: {
+          requests: this.analyzeRequestTrends(metrics),
+          errors: this.analyzeErrorTrends(metrics),
+          usage: this.analyzeUsageTrends(metrics)
+        }
       };
-    } catch (error) {
-      logger.error('Failed to analyze request metrics:', error);
-      throw new AppError(500, 'Failed to analyze request metrics');
     }
   }
 
-  public async getMetrics() {
-    try {
-      return {
-        requestCount: await this.getRequestCount(),
-        averageLatency: await this.getAverageLatency(),
-        errorRate: await this.getErrorRate(),
-        modelUsage: await this.getModelUsage()
-      };
-    } catch (error) {
-      logger.error('Failed to get AI metrics:', error);
-      throw new AppError(500, 'Failed to get AI metrics');
-    }
-  }
-
-  private analyzeCPUUsage(cpuUsage: number) {
+  private analyzeCPUUsageBasic(cpuUsage: number) {
     const status = cpuUsage > 80 ? 'critical' : cpuUsage > 60 ? 'warning' : 'normal';
     return {
       status,
       trend: this.calculateTrend([cpuUsage]),
-      recommendations: this.getCPURecommendations(cpuUsage)
+      recommendations: this.generateBasicCPURecommendations(cpuUsage)
     };
   }
 
-  private analyzeMemoryUsage(memoryUsage: number) {
+  private analyzeMemoryUsageBasic(memoryUsage: number) {
     const status = memoryUsage > 85 ? 'critical' : memoryUsage > 70 ? 'warning' : 'normal';
     return {
       status,
       trend: this.calculateTrend([memoryUsage]),
-      recommendations: this.getMemoryRecommendations(memoryUsage)
+      recommendations: this.generateBasicMemoryRecommendations(memoryUsage)
     };
   }
 
-  private analyzeRequestPatterns(metrics: RequestMetric[]) {
-    return {
-      commonPaths: this.getCommonPaths(metrics),
-      peakTimes: this.getPeakTimes(metrics),
-      errorProne: this.getErrorProneEndpoints(metrics)
-    };
-  }
-
-  private analyzeResponseTimes(metrics: RequestMetric[]) {
-    const times = metrics.map(m => m.duration);
-    return {
-      average: this.calculateAverage(times),
-      percentiles: this.calculatePercentiles(times),
-      slowest: this.getSlowestEndpoints(metrics)
-    };
-  }
-
-  private analyzeGeographicDistribution(metrics: RequestMetric[]) {
-    return metrics
-      .filter(m => m.location)
-      .reduce((acc, m) => {
-        const key = `${m.location!.country}:${m.location!.city}`;
-        acc[key] = (acc[key] || 0) + 1;
-        return acc;
-      }, {} as Record<string, number>);
-  }
-
-  private async getRequestCount(): Promise<number> {
-    // Implementation would depend on your metrics storage
-    return 0;
-  }
-
-  private async getAverageLatency(): Promise<number> {
-    // Implementation would depend on your metrics storage
-    return 0;
-  }
-
-  private async getErrorRate(): Promise<number> {
-    // Implementation would depend on your metrics storage
-    return 0;
-  }
-
-  private async getModelUsage(): Promise<Record<string, number>> {
-    // Implementation would depend on your metrics storage
-    return {};
-  }
-
-  private calculateTrend(values: number[]): 'up' | 'down' | 'stable' {
-    if (values.length < 2) return 'stable';
-    const diff = values[values.length - 1] - values[0];
-    return diff > 0 ? 'up' : diff < 0 ? 'down' : 'stable';
-  }
-
-  private calculateAverage(values: number[]): number {
-    return values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0;
-  }
-
-  private calculatePercentiles(values: number[]): Record<string, number> {
-    if (!values.length) return { p50: 0, p90: 0, p95: 0, p99: 0 };
-    const sorted = [...values].sort((a, b) => a - b);
-    return {
-      p50: sorted[Math.floor(sorted.length * 0.5)],
-      p90: sorted[Math.floor(sorted.length * 0.9)],
-      p95: sorted[Math.floor(sorted.length * 0.95)],
-      p99: sorted[Math.floor(sorted.length * 0.99)]
-    };
-  }
-
-  private getCommonPaths(metrics: RequestMetric[]): Array<{ path: string; count: number }> {
-    const counts = metrics.reduce((acc, m) => {
-      acc[m.path] = (acc[m.path] || 0) + 1;
-      return acc;
-    }, {} as Record<string, number>);
-    
-    return Object.entries(counts)
-      .map(([path, count]) => ({ path, count: count as number }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-  }
-
-  private getPeakTimes(metrics: RequestMetric[]): Array<{ hour: number; count: number }> {
-    const hourCounts = metrics.reduce((acc, m) => {
-      const hour = new Date(m.timestamp).getHours();
-      acc[hour] = (acc[hour] || 0) + 1;
-      return acc;
-    }, {} as Record<number, number>);
-
-    return Object.entries(hourCounts)
-      .map(([hour, count]) => ({ hour: parseInt(hour), count: count as number }))
-      .sort((a, b) => b.count - a.count);
-  }
-
-  private getErrorProneEndpoints(metrics: RequestMetric[]): Array<{ path: string; errorRate: number }> {
-    const pathStats = metrics.reduce((acc, m) => {
-      if (!acc[m.path]) acc[m.path] = { total: 0, errors: 0 };
-      acc[m.path].total++;
-      if (m.statusCode >= 400) acc[m.path].errors++;
-      return acc;
-    }, {} as Record<string, PathStats>);
-
-    return Object.entries(pathStats)
-      .map(([path, stats]) => ({
-        path,
-        errorRate: (stats.errors / stats.total) * 100
-      }))
-      .filter(({ errorRate }) => errorRate > 0)
-      .sort((a, b) => b.errorRate - a.errorRate)
-      .slice(0, 5);
-  }
-
-  private getSlowestEndpoints(metrics: RequestMetric[]): Array<{ path: string; avgDuration: number }> {
-    const pathStats = metrics.reduce((acc, m) => {
-      if (!acc[m.path]) acc[m.path] = { duration: 0, count: 0 };
-      acc[m.path].duration += m.duration;
-      acc[m.path].count++;
-      return acc;
-    }, {} as Record<string, EndpointStats>);
-
-    return Object.entries(pathStats)
-      .map(([path, stats]) => ({
-        path,
-        avgDuration: stats.duration / stats.count
-      }))
-      .sort((a, b) => b.avgDuration - a.avgDuration)
-      .slice(0, 5);
-  }
-
-  private getCPURecommendations(cpuUsage: number): string[] {
+  private generateBasicCPURecommendations(cpuUsage: number): string[] {
     const recommendations: string[] = [];
     if (cpuUsage > 80) {
       recommendations.push('Consider scaling up CPU resources');
@@ -985,7 +949,7 @@ Generate a response that:
     return recommendations;
   }
 
-  private getMemoryRecommendations(memoryUsage: number): string[] {
+  private generateBasicMemoryRecommendations(memoryUsage: number): string[] {
     const recommendations: string[] = [];
     if (memoryUsage > 85) {
       recommendations.push('Increase available memory');
@@ -997,7 +961,7 @@ Generate a response that:
     return recommendations;
   }
 
-  private generatePerformanceRecommendations(metrics: SystemMetrics): string[] {
+  private generateBasicRecommendations(metrics: SystemMetrics): string[] {
     const recommendations: string[] = [];
     if (metrics.cpuUsage > 70 || metrics.memoryUsage > 70) {
       recommendations.push('Consider resource scaling');
@@ -1008,19 +972,213 @@ Generate a response that:
     return recommendations;
   }
 
-  private generateRequestOptimizations(metrics: RequestMetric[]): string[] {
-    const recommendations: string[] = [];
-    const slowEndpoints = this.getSlowestEndpoints(metrics);
-    const errorEndpoints = this.getErrorProneEndpoints(metrics);
-
-    if (slowEndpoints.length > 0) {
-      recommendations.push(`Optimize slow endpoints: ${slowEndpoints[0].path}`);
+  private async analyzeCPUUsage(cpuUsage: number) {
+    if (!this.llmClients.gemini) {
+      return this.analyzeCPUUsageBasic(cpuUsage);
     }
-    if (errorEndpoints.length > 0) {
-      recommendations.push(`Fix error-prone endpoints: ${errorEndpoints[0].path}`);
-    }
+    const status = cpuUsage > 80 ? 'critical' : cpuUsage > 60 ? 'warning' : 'normal';
+    return {
+      status,
+      trend: this.calculateTrend([cpuUsage]),
+      recommendations: await this.getCPURecommendations([{
+        timestamp: new Date().toISOString(),
+        method: 'GET',
+        path: '/metrics/cpu',
+        statusCode: 200,
+        responseTime: 0,
+        location: { country: 'Unknown', city: 'Unknown' },
+        duration: cpuUsage
+      }])
+    };
+  }
 
-    return recommendations;
+  private async analyzeMemoryUsage(memoryUsage: number) {
+    if (!this.llmClients.gemini) {
+      return this.analyzeMemoryUsageBasic(memoryUsage);
+    }
+    const status = memoryUsage > 85 ? 'critical' : memoryUsage > 70 ? 'warning' : 'normal';
+    return {
+      status,
+      trend: this.calculateTrend([memoryUsage]),
+      recommendations: await this.getMemoryRecommendations([{
+        timestamp: new Date().toISOString(),
+        method: 'GET',
+        path: '/metrics/memory',
+        statusCode: 200,
+        responseTime: 0,
+        location: { country: 'Unknown', city: 'Unknown' },
+        duration: memoryUsage
+      }])
+    };
+  }
+
+  async getSystemMetrics(): Promise<SystemMetrics> {
+    const cpuUsage = await this.getCPUUsage();
+    const memoryUsage = await this.getMemoryUsage();
+    const diskUsage = await this.getDiskUsage();
+
+    const cpuStatus = this.getResourceStatus(cpuUsage);
+    const memoryStatus = this.getResourceStatus(memoryUsage);
+    const diskStatus = this.getResourceStatus(diskUsage);
+
+    return {
+      cpuUsage,
+      memoryUsage,
+      diskUsage,
+      errorCount: 0, // This should be implemented to track actual errors
+      totalRequests: 0, // This should be implemented to track actual requests
+      activeUsers: 0, // This should be implemented to track actual active users
+      cpu: {
+        usage: cpuUsage,
+        status: cpuStatus,
+        trend: this.calculateTrend([cpuUsage]),
+        recommendations: await this.getResourceMetrics('cpu', cpuUsage)
+      },
+      memory: {
+        usage: memoryUsage,
+        status: memoryStatus,
+        trend: this.calculateTrend([memoryUsage]),
+        recommendations: await this.getResourceMetrics('memory', memoryUsage)
+      },
+      disk: {
+        usage: diskUsage,
+        status: diskStatus
+      }
+    };
+  }
+
+  private async getResourceMetrics(type: 'cpu' | 'memory', usage: number): Promise<string[]> {
+    const metric: RequestMetric = {
+      timestamp: new Date().toISOString(),
+      method: 'GET',
+      path: `/metrics/${type}`,
+      statusCode: 200,
+      responseTime: 0,
+      location: {
+        country: 'Unknown',
+        city: 'Unknown'
+      },
+      duration: usage
+    };
+
+    return type === 'cpu' 
+      ? this.getCPURecommendations([metric])
+      : this.getMemoryRecommendations([metric]);
+  }
+
+  private getResourceStatus(usage: number): ResourceStatus {
+    if (usage > 80) return 'critical';
+    if (usage > 60) return 'warning';
+    return 'normal';
+  }
+
+  private async getCPUUsage(): Promise<number> {
+    // This would be implemented to get actual CPU usage
+    // For now, return a mock value
+    return Math.floor(Math.random() * 100);
+  }
+
+  private async getMemoryUsage(): Promise<number> {
+    // This would be implemented to get actual memory usage
+    // For now, return a mock value
+    return Math.floor(Math.random() * 100);
+  }
+
+  private async getDiskUsage(): Promise<number> {
+    // This would be implemented to get actual disk usage
+    // For now, return a mock value
+    return Math.floor(Math.random() * 100);
+  }
+
+  private async getRecommendations(params: any): Promise<string[]> {
+    try {
+      const { type, metrics } = params;
+      switch (type) {
+        case 'cpu':
+          return this.getCPURecommendations(metrics);
+        case 'memory':
+          return this.getMemoryRecommendations(metrics);
+        default:
+          return this.generateBasicRecommendations(metrics);
+      }
+    } catch (error) {
+      logger.error('Error getting recommendations:', error);
+      return ['No recommendations available'];
+    }
+  }
+
+  private async getCPURecommendations(metrics: RequestMetric[]): Promise<string[]> {
+    try {
+      const prompt = `Given these request metrics: ${JSON.stringify(metrics)},
+        suggest CPU optimizations.
+        Include:
+        - Resource usage patterns
+        - Bottlenecks
+        - Scaling recommendations
+        Return recommendations as a JSON array of strings.`;
+
+      const content = await this.generateContent(prompt);
+      return JSON.parse(content);
+    } catch (error) {
+      logger.error('Error generating CPU recommendations:', error);
+      return this.generateBasicCPURecommendations(metrics[0].duration);
+    }
+  }
+
+  private async getMemoryRecommendations(metrics: RequestMetric[]): Promise<string[]> {
+    try {
+      const prompt = `Given these request metrics: ${JSON.stringify(metrics)},
+        suggest memory optimizations.
+        Include:
+        - Resource usage patterns
+        - Memory leaks
+        - Scaling recommendations
+        Return recommendations as a JSON array of strings.`;
+
+      const content = await this.generateContent(prompt);
+      return JSON.parse(content);
+    } catch (error) {
+      logger.error('Error generating memory recommendations:', error);
+      return this.generateBasicMemoryRecommendations(metrics[0].duration);
+    }
+  }
+
+  private async generatePerformanceRecommendations(metrics: SystemMetrics): Promise<string[]> {
+    try {
+      const prompt = `Given these system metrics:
+        CPU Usage: ${metrics.cpuUsage}%
+        Memory Usage: ${metrics.memoryUsage}%
+        Error Count: ${metrics.errorCount}
+        Total Requests: ${metrics.totalRequests}
+        Active Users: ${metrics.activeUsers}
+
+        Generate performance recommendations.
+        Include:
+        - Resource optimization
+        - Scaling suggestions
+        - Error handling
+        Return recommendations as a JSON array of strings.`;
+
+      const content = await this.generateContent(prompt);
+      return JSON.parse(content);
+    } catch (error) {
+      logger.error('Error generating performance recommendations:', error);
+      return this.generateBasicRecommendations(metrics);
+    }
+  }
+
+  private calculateTrend(values: number[]): 'up' | 'down' | 'stable' {
+    if (values.length < 2) return 'stable';
+    const diff = values[values.length - 1] - values[0];
+    return diff > 0 ? 'up' : diff < 0 ? 'down' : 'stable';
+  }
+
+  private async generateContent(input: string): Promise<string> {
+    if (!this.llmClients.gemini) {
+      throw new Error('Gemini client not initialized');
+    }
+    const result = await this.llmClients.gemini.generateContent([{ text: input }]);
+    return result.response.text();
   }
 
   private analyzeRequestTrends(metrics: SystemMetrics) {
