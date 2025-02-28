@@ -4,6 +4,7 @@ import { LLMProvider } from '@admin-ai/shared/src/types/ai';
 import { logger } from '../utils/logger';
 import { WebSocketService } from '../services/websocket.service';
 import { AppError } from '../middleware/errorHandler';
+import crypto from 'crypto';
 
 const aiSettingsService = new AISettingsService();
 
@@ -87,11 +88,63 @@ export const aiSettingsController = {
 
   async getAllProviderSettings(req: Request, res: Response) {
     try {
+      if (!req.user?.id) {
+        throw new AppError(401, 'Authentication required');
+      }
+
       const settings = await aiSettingsService.getAllProviderSettings(req.user.id);
+
+      // Send notification for successful settings retrieval
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, {
+        id: crypto.randomUUID(),
+        content: 'Retrieved all provider settings',
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'getAllProviderSettings'
+          },
+          timestamp: Date.now(),
+          read: false
+        }
+      });
+
       res.json(settings);
     } catch (error) {
       logger.error('Failed to get all provider settings:', error);
-      res.status(500).json({ error: 'Failed to get all provider settings' });
+
+      if (req.user?.id) {
+        // Send error notification if we have a user
+        const wsService: WebSocketService = req.app.get('wsService');
+        wsService.sendToUser(req.user.id, {
+          id: crypto.randomUUID(),
+          content: `Failed to retrieve provider settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+          role: 'system',
+          metadata: {
+            type: 'notification',
+            status: 'error',
+            category: 'system',
+            source: {
+              page: 'AI Settings',
+              controller: 'AISettingsController',
+              action: 'getAllProviderSettings'
+            },
+            timestamp: Date.now(),
+            read: false
+          }
+        });
+      }
+
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: 'Failed to get all provider settings' });
+      }
     }
   },
 

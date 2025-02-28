@@ -314,6 +314,24 @@ export class SystemMetricsService extends EventEmitter {
     metrics.errorCount = 0;
     metrics.warningCount = 0;
     
+    // Calculate active users from auth logs within last 15 minutes
+    const fifteenMinutesAgo = new Date(Date.now() - 15 * 60 * 1000);
+    metrics.activeUsers = this.authLogs.filter(log => 
+      new Date(log.timestamp).getTime() > fifteenMinutesAgo.getTime() && log.action === 'login'
+    ).length;
+
+    // Calculate average response time from recent requests
+    const recentRequests = this.requestMetrics.filter(metric => 
+      new Date(metric.timestamp).getTime() > fifteenMinutesAgo.getTime()
+    );
+    metrics.averageResponseTime = recentRequests.length > 0
+      ? recentRequests.reduce((sum, req) => sum + req.duration, 0) / recentRequests.length
+      : 0;
+
+    // Initialize empty arrays/objects for optional fields
+    metrics.topPaths = [];
+    metrics.locationStats = {};
+    
     return metrics;
   }
 
@@ -358,6 +376,55 @@ export class SystemMetricsService extends EventEmitter {
     } catch (err) {
       logger.error('Failed to log error:', err);
     }
+  }
+
+  public async logAuth(log: AuthLog): Promise<void> {
+    try {
+      // Add to in-memory logs
+      this.authLogs.push(log);
+      
+      // Trim logs if they exceed the maximum
+      if (this.authLogs.length > this.maxLogsToKeep) {
+        this.authLogs = this.authLogs.slice(-this.maxLogsToKeep);
+      }
+
+      // Emit event for real-time monitoring
+      if (this.wsService) {
+        this.wsService.sendToUser(log.userId, {
+          id: crypto.randomUUID(),
+          content: `Authentication event: ${log.action}`,
+          role: 'system',
+          metadata: {
+            type: 'notification',
+            status: log.action === 'failed_login' ? 'error' : 'info',
+            category: 'auth',
+            source: {
+              page: 'Authentication',
+              action: log.action,
+              details: {
+                userId: log.userId,
+                ip: log.ip,
+                location: log.location
+              }
+            },
+            timestamp: Date.now(),
+            read: false
+          }
+        });
+      }
+
+      // Log to auth log file
+      logger.info('Authentication event', {
+        ...log,
+        type: 'auth_log'
+      });
+    } catch (error) {
+      logger.error('Failed to log auth event:', error);
+    }
+  }
+
+  public async getAuthLogs(): Promise<AuthLog[]> {
+    return this.authLogs;
   }
 
   public async shutdown(): Promise<void> {

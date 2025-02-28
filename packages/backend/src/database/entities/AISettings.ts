@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn, UpdateDateColumn, ManyToOne, JoinColumn } from 'typeorm';
-import { LLMProvider } from '@admin-ai/shared/src/types/ai';
+import { LLMProvider, AIProviderConfig } from '@admin-ai/shared/src/types/ai';
 import { User } from './User';
 
 @Entity()
@@ -14,32 +14,17 @@ export class AISettings {
   @JoinColumn({ name: 'userId' })
   user!: User;
 
-  @Column({
-    type: 'enum',
-    enum: ['openai', 'anthropic', 'gemini'],
-  })
-  provider!: LLMProvider;
+  @Column({ type: 'jsonb', default: [] })
+  providers!: AIProviderConfig[];
 
-  @Column({ type: 'text' })
-  apiKey!: string;
+  @Column({ default: true })
+  enableRandomMessages!: boolean;
 
-  @Column({ default: false })
-  isActive!: boolean;
-
-  @Column({ default: false })
-  isVerified!: boolean;
-
-  @Column({ type: 'text', nullable: true })
-  selectedModel!: string | null;
+  @Column({ default: 5000 })
+  messageInterval!: number;
 
   @Column('text', { array: true, default: '{}' })
-  availableModels!: string[];
-
-  @Column({ type: 'jsonb', default: {} })
-  settings!: Record<string, any>;
-
-  @Column({ type: 'timestamp', nullable: true })
-  lastVerified!: Date | null;
+  systemCommands!: string[];
 
   @CreateDateColumn()
   createdAt!: Date;

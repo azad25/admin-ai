@@ -93,6 +93,10 @@ export class WebSocketService extends EventEmitter {
     return WebSocketService.instance;
   }
 
+  public getConnectionStatus(): boolean {
+    return this.isConnected;
+  }
+
   public isInitialized(): boolean {
     return this.io !== null;
   }
@@ -131,14 +135,27 @@ export class WebSocketService extends EventEmitter {
         pingInterval: 5000
       });
 
-      this.setupEventHandlers();
-      logger.info('WebSocket service initialized with configuration:', {
-        path: '/socket.io',
-        origins: process.env.NODE_ENV === 'production' 
-          ? process.env.FRONTEND_URL 
-          : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'],
-        transports: ['websocket', 'polling']
+      // Add authentication middleware
+      this.io.use(async (socket, next) => {
+        try {
+          const token = socket.handshake.auth.token;
+          if (!token) {
+            logger.warn('No token provided for socket connection');
+            return next(new Error('Authentication required'));
+          }
+
+          const decoded = await verifyToken(token);
+          socket.data.userId = decoded.userId;
+          next();
+        } catch (error) {
+          logger.error('Socket authentication failed:', error);
+          next(new Error('Authentication failed'));
+        }
       });
+
+      this.setupEventHandlers();
+      this.isConnected = true;
+      logger.info('WebSocket service initialized successfully');
 
       // Verify connection immediately
       this.checkConnection();
@@ -151,45 +168,6 @@ export class WebSocketService extends EventEmitter {
   private setupEventHandlers(): void {
     if (!this.io) return;
 
-    // Define the authentication middleware
-    const authMiddleware: SocketMiddleware = async (socket, next) => {
-      try {
-        const token = socket.handshake.auth.token;
-        if (!token) {
-          logger.warn('Authentication failed: No token provided');
-          next(new Error('Authentication error: No token provided'));
-          return;
-        }
-
-        try {
-          const decoded = await verifyToken(token);
-          socket.data.userId = decoded.userId;
-          logger.debug('Socket authenticated successfully', {
-            socketId: socket.id,
-            userId: decoded.userId
-          });
-          next();
-        } catch (error: any) {
-          if (error instanceof AppError && 'refreshToken' in error) {
-            const refreshError = error as TokenRefreshError;
-            // Send the refresh token back to the client
-            socket.emit('token:refresh', { token: refreshError.refreshToken });
-            // Allow the connection but client should reconnect with new token
-            socket.data.userId = refreshError.refreshToken;
-            next();
-          } else {
-            logger.error('Socket authentication error:', error);
-            next(new Error('Authentication error: Invalid token'));
-          }
-        }
-      } catch (error) {
-        logger.error('Socket middleware error:', error);
-        next(new Error('Authentication error: Server error'));
-      }
-    };
-
-    this.io.use(authMiddleware);
-
     this.io.on('connection', (socket: Socket) => {
       const userId = socket.data.userId;
       logger.info(`Client connected: ${socket.id}`, {
@@ -197,18 +175,18 @@ export class WebSocketService extends EventEmitter {
         transport: socket.conn.transport.name
       });
 
+      // Track user's sockets
+      if (!this.userSockets.has(userId)) {
+        this.userSockets.set(userId, new Set());
+      }
+      this.userSockets.get(userId)?.add(socket.id);
+
       // Initialize AI service with user ID
       if (this.aiService && userId) {
         this.aiService.initialize(userId).catch(error => {
           logger.error('Failed to initialize AI service:', error);
         });
       }
-
-      // Track user's sockets
-      if (!this.userSockets.has(userId)) {
-        this.userSockets.set(userId, new Set());
-      }
-      this.userSockets.get(userId)?.add(socket.id);
 
       socket.on('disconnect', (reason) => {
         logger.info(`Client disconnected: ${socket.id}`, {
@@ -221,11 +199,12 @@ export class WebSocketService extends EventEmitter {
         }
       });
 
-      // Handle monitoring subscription
-      socket.on('subscribe:monitoring', async () => {
-        if (this.monitoring) {
-          const status = await this.monitoring.getSystemStatus();
-          this.sendToSocket(socket.id, 'metrics-updated', status);
+      // Handle message events
+      socket.on('message', (message: { type: string; data: any }) => {
+        try {
+          this.handleMessage(message);
+        } catch (error) {
+          logger.error('Error handling message:', error);
         }
       });
 
@@ -236,74 +215,6 @@ export class WebSocketService extends EventEmitter {
           userId,
           error
         });
-      });
-
-      // Handle AI messages
-      socket.on('ai_message', async (message: { content: string }) => {
-        try {
-          if (!this.aiService) {
-            throw new Error('AI service not initialized');
-          }
-
-          const timestamp = new Date().toISOString();
-          
-          // Create user message
-          const userMessage: AIMessage = {
-            id: crypto.randomUUID(),
-            content: message.content,
-            role: 'user',
-            timestamp,
-            metadata: {
-              type: 'chat',
-              timestamp,
-              read: true
-            }
-          };
-
-          // Send user message to client
-          this.sendToUser(userId, {
-            type: 'ai_message',
-            data: userMessage
-          });
-
-          // Process the message and get AI response
-          const response = await this.aiService.processMessage(userMessage, userId);
-          
-          // Send the AI response
-          this.sendToUser(userId, {
-            type: 'ai_message',
-            data: response
-          });
-        } catch (error) {
-          logger.error('Failed to process AI message:', error);
-          const timestamp = new Date().toISOString();
-          const errorMessage: AIMessage = {
-            id: crypto.randomUUID(),
-            content: 'Sorry, I encountered an error. Please try again.',
-            role: 'system',
-            timestamp,
-            metadata: {
-              type: 'notification',
-              status: 'error',
-              category: 'ai',
-              timestamp,
-              read: false
-            }
-          };
-          this.sendToUser(userId, {
-            type: 'ai_message',
-            data: errorMessage
-          });
-        }
-      });
-
-      // Handle other message types
-      socket.on('message', (message: { type: string; data: any }) => {
-        try {
-          this.handleMessage(socket, message);
-        } catch (error) {
-          logger.error('Failed to handle socket message:', error);
-        }
       });
     });
   }
@@ -321,20 +232,107 @@ export class WebSocketService extends EventEmitter {
     });
   }
 
-  private handleMessage(socket: Socket, message: { type: string; data: any }): void {
-    switch (message.type) {
-      case 'ai_message':
-        this.handleAIMessage(socket.data.userId, message.data);
-        break;
-      default:
-        logger.warn(`Unknown message type: ${message.type}`);
+  private handleMessage(message: { type: string; data: any }): void {
+    try {
+      if (!message || !message.type) {
+        logger.warn('Invalid message format received');
+        return;
+      }
+
+      switch (message.type) {
+        case 'ai_message':
+          this.handleAIMessage(message.data);
+          break;
+        case 'metrics_update':
+          this.handleMetricsUpdate(message.data);
+          break;
+        case 'error_log':
+          this.handleErrorLog(message.data);
+          break;
+        case 'system_status':
+          this.handleSystemStatus(message.data);
+          break;
+        default:
+          // For any other message type, just emit it
+          this.emit(message.type, message.data);
+      }
+    } catch (error) {
+      logger.error('Error handling message:', error);
     }
   }
 
-  private handleAIMessage(userId: string, message: AIMessage): void {
+  private async handleAIMessage(data: { content: string; userId: string }): Promise<void> {
+    try {
+      if (!this.aiService) {
+        throw new Error('AI service not initialized');
+      }
+
+      // Emit start event to show loading state
+      this.sendToUser(data.userId, {
+        type: 'ai:start'
+      });
+
+      // Create user message
+      const userMessage: AIMessage = {
+        id: crypto.randomUUID(),
+        content: data.content,
+        role: 'user',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          type: 'chat',
+          timestamp: new Date().toISOString(),
+          read: true
+        }
+      };
+
+      // Send user message to client
+      this.sendToUser(data.userId, {
+        type: 'ai:message',
+        data: userMessage
+      });
+
+      // Process through AI service
+      const response = await this.aiService.processMessage(userMessage, data.userId);
+      
+      // Send AI response
+      this.sendToUser(data.userId, {
+        type: 'ai:message',
+        data: response
+      });
+
+      // Emit end event to hide loading state
+      this.sendToUser(data.userId, {
+        type: 'ai:end'
+      });
+    } catch (error) {
+      logger.error('Failed to process AI message:', error);
+      this.handleAIError(data.userId, error);
+    }
+  }
+
+  private handleAIError(userId: string, error: any): void {
+    const timestamp = new Date().toISOString();
+    const errorMessage: AIMessage = {
+      id: crypto.randomUUID(),
+      content: 'Sorry, I encountered an error. Please try again.',
+      role: 'system',
+      timestamp,
+      metadata: {
+        type: 'notification',
+        status: 'error',
+        category: 'ai',
+        timestamp,
+        read: false
+      }
+    };
+
     this.sendToUser(userId, {
-      type: 'ai_message',
-      data: message
+      type: 'ai:message',
+      data: errorMessage
+    });
+
+    this.sendToUser(userId, {
+      type: 'ai:end'
     });
   }
 

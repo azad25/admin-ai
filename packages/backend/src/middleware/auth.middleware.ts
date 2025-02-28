@@ -4,6 +4,7 @@ import { AppDataSource } from '../database';
 import { User as UserEntity } from '../database/entities/User';
 import { AppError } from './errorHandler';
 import { logger } from '../utils/logger';
+import { verifyToken } from '../utils/auth';
 
 // Extend Express Request type
 declare global {
@@ -28,6 +29,10 @@ const PUBLIC_PATHS = [
   '/apple-touch-icon-precomposed.png'
 ];
 
+// Cache for user data
+const userCache = new Map<string, { user: UserEntity; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Define the User interface
 interface User {
   id: string;
@@ -36,7 +41,7 @@ interface User {
 }
 
 export const authMiddleware = {
-  requireAuth: (req: Request, res: Response, next: NextFunction) => {
+  requireAuth: async (req: Request, res: Response, next: NextFunction) => {
     try {
       // Skip auth for public paths
       if (PUBLIC_PATHS.some(path => req.path.endsWith(path))) {
@@ -71,23 +76,50 @@ export const authMiddleware = {
         throw new AppError(401, 'Invalid authentication token');
       }
 
-      const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key') as {
-        userId: string;
-        email?: string;
-        role?: string;
-      };
+      try {
+        const decoded = await verifyToken(token);
+        
+        // Check cache first
+        const cachedData = userCache.get(decoded.userId);
+        if (cachedData && Date.now() - cachedData.timestamp < CACHE_TTL) {
+          req.user = cachedData.user;
+          return next();
+        }
 
-      // Set user on request
-      req.user = {
-        id: decoded.userId,
-        email: decoded.email || 'unknown',
-        role: decoded.role || 'USER',
-        name: 'User',
-        createdAt: new Date(),
-        updatedAt: new Date()
-      } as UserEntity;
+        // If not in cache or expired, fetch from database
+        const user = await userRepository.findOne({ where: { id: decoded.userId } });
+        if (!user) {
+          throw new AppError(401, 'User not found');
+        }
 
-      next();
+        // Update cache
+        userCache.set(decoded.userId, { user, timestamp: Date.now() });
+        req.user = user;
+
+        // Check for token refresh
+        const tokenAge = decoded.iat ? Date.now() / 1000 - decoded.iat : 0;
+        if (tokenAge > 3600) { // 1 hour
+          const refreshToken = jwt.sign(
+            { userId: user.id, email: user.email, role: user.role },
+            process.env.JWT_SECRET || 'your-secret-key',
+            { expiresIn: '24h' }
+          );
+          res.set('X-New-Token', refreshToken);
+        }
+
+        next();
+      } catch (error) {
+        if (error instanceof AppError && error.message.includes('Token refresh required')) {
+          // Handle token refresh
+          const refreshError = error as { refreshToken?: string };
+          if (refreshError.refreshToken) {
+            res.set('X-New-Token', refreshError.refreshToken);
+          }
+          next();
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       if (error instanceof jwt.JsonWebTokenError) {
         // Log token verification failure

@@ -527,12 +527,20 @@ Generate a response that:
   }
 
   async getSystemStatus(): Promise<AISystemStatus> {
-    // Implement actual system status gathering
+    const providers = await this.aiSettingsService.getAllProviderSettings();
+    const activeProviders = providers
+      .filter(p => p.isActive && p.isVerified)
+      .map(p => ({
+        provider: p.provider,
+        model: p.selectedModel || 'default'
+      }));
+
     return {
-      activeConnections: 0,
-      databaseSize: '0 MB',
-      tableCounts: {},
-      lastUpdated: new Date()
+      ready: this.isReady,
+      connected: this.wsService?.getConnectionStatus() || false,
+      initialized: true,
+      hasProviders: activeProviders.length > 0,
+      activeProviders
     };
   }
 
@@ -633,23 +641,50 @@ Generate a response that:
   }
 
   public async initialize(): Promise<void> {
+    if (this.isReady) {
+      logger.info('AI service is already initialized');
+      return;
+    }
+
     try {
-      // Initialize AI service components
+      logger.info('Initializing AI service...');
       await this.setupAIComponents();
       this.isReady = true;
-      this.emit('ready');
+      
+      // Broadcast initial status
+      if (this.wsService) {
+        const status = await this.getSystemStatus();
+        this.wsService.broadcast('ai:status', status);
+        this.wsService.broadcast('ai:ready', { ready: true });
+      }
+
       logger.info('AI service initialized successfully');
     } catch (error) {
-      logger.error('Failed to initialize AI service', { error });
-      this.emit('error', error);
+      logger.error('Failed to initialize AI service:', error);
       throw error;
     }
   }
 
   private async setupAIComponents(): Promise<void> {
-    // Set up AI components and models
-    // This is where you would initialize your AI models, load configurations, etc.
-    logger.info('Setting up AI components...');
+    try {
+      // Wait for settings service to be ready
+      await this.aiSettingsService.waitForReady();
+      
+      // Get active provider settings
+      const providers = await this.aiSettingsService.getAllProviderSettings();
+      
+      // Initialize each provider client
+      for (const provider of providers) {
+        if (provider.isActive && provider.isVerified) {
+          await this.initializeClient(provider.provider, provider.apiKey);
+        }
+      }
+
+      logger.info('AI components setup completed');
+    } catch (error) {
+      logger.error('Failed to setup AI components:', error);
+      throw error;
+    }
   }
 
   public async executeAction(action: string, params: any): Promise<any> {

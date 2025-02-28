@@ -11,6 +11,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 type SafeWebSocketService = {
   isInitialized(): boolean;
   broadcast(event: string, data: any): void;
+  getConnectionStatus(): boolean;
 };
 
 export class AISettingsService extends EventEmitter {
@@ -87,41 +88,20 @@ export class AISettingsService extends EventEmitter {
 
   public setWebSocketService(wsService: WebSocketService) {
     logger.info('Setting WebSocket service');
-    
+    this.wsService = wsService;
+
     // Clear any existing intervals
     if (this.wsInitCheckInterval) {
       clearInterval(this.wsInitCheckInterval);
       this.wsInitCheckInterval = null;
     }
-    
+
     if (this.wsConnectionCheckInterval) {
       clearInterval(this.wsConnectionCheckInterval);
       this.wsConnectionCheckInterval = null;
     }
 
-    // Set the new WebSocket service
-    this.wsService = wsService;
-    
-    // Listen for WebSocket events
-    wsService.on('connected', () => {
-      logger.info('WebSocket connected event received');
-      this.wsConnected = true;
-      this.wsInitialized = true;
-      this.checkAndBroadcastStatus().catch(error => {
-        logger.error('Failed to broadcast status after connection:', error);
-      });
-    });
-
-    wsService.on('disconnected', () => {
-      logger.warn('WebSocket disconnected event received');
-      this.wsConnected = false;
-      this.wsInitialized = false;
-    });
-    
-    // Set up listeners and check connection immediately
-    this.setupWebSocketListeners();
-    
-    // Check WebSocket initialization status immediately
+    // Check if already initialized
     if (wsService.isInitialized()) {
       logger.info('WebSocket service is already initialized');
       this.wsInitialized = true;
@@ -132,23 +112,35 @@ export class AISettingsService extends EventEmitter {
       this.checkForActiveProviders().catch(error => {
         logger.error('Failed to check for active providers after setting WebSocket service:', error);
       });
-    } else {
-      logger.info('WebSocket service not yet initialized, setting up initialization check');
-      // Start initialization check
-      this.wsInitCheckInterval = setInterval(() => {
+    }
+
+    // Set up initialization check with shorter interval
+    this.wsInitCheckInterval = setInterval(async () => {
+      try {
         if (wsService.isInitialized()) {
           logger.info('WebSocket service initialized during check');
           this.wsInitialized = true;
           this.wsConnected = true;
-          clearInterval(this.wsInitCheckInterval!);
-          this.wsInitCheckInterval = null;
+          
+          // Clear the interval once initialized
+          if (this.wsInitCheckInterval) {
+            clearInterval(this.wsInitCheckInterval);
+            this.wsInitCheckInterval = null;
+          }
+          
           this.setupConnectionCheck();
-          this.checkForActiveProviders().catch(error => {
-            logger.error('Failed to check for active providers after initialization:', error);
-          });
+          
+          // Check active providers and broadcast status
+          await this.checkForActiveProviders();
+          await this.checkAndBroadcastStatus();
         }
-      }, 500);
-    }
+      } catch (error) {
+        logger.error('Error during WebSocket initialization check:', error);
+      }
+    }, 500);
+
+    // Set up connection check regardless of current state
+    this.setupConnectionCheck();
   }
 
   public async waitForReady(): Promise<void> {
@@ -274,103 +266,63 @@ export class AISettingsService extends EventEmitter {
       try {
         const wasConnected = this.wsConnected;
         const isInitialized = this.wsService?.isInitialized() || false;
+        const isConnected = this.wsService?.getConnectionStatus() || false;
         
         // Update connection state
-        this.wsConnected = isInitialized;
+        this.wsConnected = isConnected;
         this.wsInitialized = isInitialized;
 
         // Log connection state changes
         if (wasConnected !== this.wsConnected) {
           if (this.wsConnected) {
-            logger.info('WebSocket connection established during check');
-            // Check active providers and broadcast status immediately
+            logger.info('WebSocket connection established');
             await this.checkForActiveProviders();
             await this.checkAndBroadcastStatus();
           } else {
-            logger.warn('WebSocket connection lost during check');
-          }
-        }
-
-        // If we're connected, ensure service state is properly reflected
-        if (this.wsConnected) {
-          const hasActiveProviders = await this.hasVerifiedProviders();
-          const isReady = await this.isServiceReady();
-          
-          logger.debug('Connection check status:', {
-            wsConnected: this.wsConnected,
-            wsInitialized: this.wsInitialized,
-            hasActiveProviders,
-            isReady,
-            initialized: this.initialized
-          });
-
-          // If we're connected and have active providers but not initialized
-          if (hasActiveProviders && !this.initialized) {
-            this.initialized = true;
-            this.readyResolve();
-            logger.info('Service marked as ready during connection check', {
-              wsConnected: this.wsConnected,
-              hasActiveProviders,
-              initialized: this.initialized
-            });
-            await this.checkAndBroadcastStatus();
+            logger.warn('WebSocket connection lost');
           }
         }
       } catch (error) {
-        logger.error('Error during connection check:', error);
+        logger.error('Error during WebSocket connection check:', error);
       }
-    }, 1000);
+    }, 5000); // Check every 5 seconds
   }
 
   private async checkAndBroadcastStatus() {
     try {
-      // Check if WebSocket service is available
-      if (!this.wsService) {
-        logger.debug('No WebSocket service available for status broadcast');
-        return;
-      }
-
-      // Get current settings and check for active providers
-      const settings = await this.aiSettingsRepository.find();
-      const activeProviders = settings.flatMap(s => s.providers || [])
-        .filter(p => p.isVerified && p.isActive);
-
-      this.hasActiveProviders = activeProviders.length > 0;
-
-      // Check if service is actually ready
-      const isReady = await this.isServiceReady();
-
-      // Prepare status object
+      const hasVerifiedProviders = await this.hasVerifiedProviders();
       const status = {
-        ready: isReady,
-        connected: this.wsConnected && this.wsService.isInitialized(),
-        initialized: this.initialized,
-        hasProviders: this.hasActiveProviders,
-        activeProviders: activeProviders.map(p => ({
-          provider: p.provider,
-          model: p.selectedModel
-        }))
+        ready: this.wsInitialized && hasVerifiedProviders,
+        connected: this.wsConnected,
+        initialized: this.wsInitialized,
+        hasProviders: hasVerifiedProviders,
+        activeProviders: await this.getActiveProviders()
       };
 
-      // Log the status we're about to broadcast
-      logger.info('Broadcasting AI service status:', status);
-
-      // Broadcast the status
-      this.wsService.broadcast('ai:status', status);
-
-      // Only broadcast ready if we have active providers
-      if (status.ready) {
-        this.wsService.broadcast('ai:ready', { 
-          ready: true,
-          hasProviders: this.hasActiveProviders,
-          activeProviders: activeProviders.map(p => p.provider)
-        });
+      if (this.wsService && this.wsInitialized) {
+        this.wsService.broadcast('ai:status', status);
+        if (status.ready) {
+          this.wsService.broadcast('ai:ready', { ready: true });
+        }
       }
-
-      return status;
     } catch (error) {
       logger.error('Failed to check and broadcast status:', error);
-      throw error;
+    }
+  }
+
+  private async getActiveProviders() {
+    try {
+      const settings = await this.aiSettingsRepository.find();
+      return settings
+        .flatMap(s => s.providers)
+        .filter(p => p.isActive && p.isVerified)
+        .map(p => ({
+          provider: p.provider,
+          model: p.selectedModel || 'default'
+        }));
+    } catch (error) {
+      logger.error('Failed to get active providers:', error);
+      return [];
     }
   }
 
@@ -490,7 +442,7 @@ export class AISettingsService extends EventEmitter {
     }
 
     try {
-      // Set up initialization promise
+      // Set up initialization promise if not already set
       if (!this.initializationPromise) {
         this.initializationPromise = new Promise((resolve) => {
           this.readyResolve = resolve;
@@ -502,34 +454,50 @@ export class AISettingsService extends EventEmitter {
 
       // Check for active providers
       const settings = await this.aiSettingsRepository.find();
+      
+      // Check if any settings have active and verified providers
       this.hasActiveProviders = settings.some(setting => 
-        setting.providers.some(provider => provider.isVerified && provider.isActive)
+        setting.providers?.some(provider => provider.isVerified && provider.isActive)
       );
 
       logger.info('Checking active providers during initialization', {
         hasActiveProviders: this.hasActiveProviders,
         totalSettings: settings.length,
-        activeProviders: settings.filter(s => s.providers.some(p => p.isVerified && p.isActive)).length
+        activeProviders: settings.flatMap(s => s.providers || [])
+          .filter(p => p.isVerified && p.isActive)
+          .map(p => ({
+            provider: p.provider,
+            model: p.selectedModel
+          }))
       });
 
-      // Initialize even if no active providers
-      this.initialized = true;
-      
-      // Resolve the ready promise if no active providers or if WebSocket is ready
-      if (!this.hasActiveProviders || (this.wsService?.isInitialized() && this.wsConnected)) {
-        logger.info('Service ready', {
-          hasActiveProviders: this.hasActiveProviders,
-          wsInitialized: this.wsService?.isInitialized(),
-          wsConnected: this.wsConnected
-        });
-        this.readyResolve();
+      // If we have active providers, wait for WebSocket to be ready
+      if (this.hasActiveProviders) {
+        if (!this.wsService?.isInitialized()) {
+          logger.info('Waiting for WebSocket service to initialize...');
+          // Don't mark as initialized yet, wait for WebSocket
+          return;
+        }
+        
+        logger.info('WebSocket service is ready, proceeding with initialization');
       }
 
-      // Broadcast initial status
-      await this.checkAndBroadcastStatus();
+      // Mark as initialized
+      this.initialized = true;
+      this.readyResolve();
+      
+      // Broadcast initial status if we have WebSocket service
+      if (this.wsService?.isInitialized()) {
+        await this.checkAndBroadcastStatus();
+      }
 
     } catch (error) {
       logger.error('Failed to initialize AISettingsService:', error);
+      // On error, mark as initialized only if we don't have active providers
+      if (!this.hasActiveProviders) {
+        this.initialized = true;
+        this.readyResolve();
+      }
       throw error;
     }
   }
@@ -598,26 +566,32 @@ export class AISettingsService extends EventEmitter {
     }
   }
 
-  async getAllProviderSettings(): Promise<AIProviderConfig[]> {
+  async getAllProviderSettings(userId: string): Promise<AIProviderConfig[]> {
     try {
       await this.initialize();
-      logger.info('Getting all provider settings');
+      logger.info('Getting all provider settings', { userId });
 
-      // Get all settings first
-      const allSettings = await this.aiSettingsRepository.find();
+      // Get settings for the specific user
+      const settings = await this.aiSettingsRepository.findOne({
+        where: { userId }
+      });
 
-      // Collect all unique providers across all settings
-      const allProviders = allSettings.flatMap(settings => settings.providers || [])
-        .filter(p => p.isVerified && p.isActive)
-        .map(provider => ({
-          ...provider,
-          apiKey: '********' // Mask API keys for security
-        }));
+      if (!settings) {
+        return [];
+      }
 
-      logger.info('Retrieved all provider settings', {
-        totalSettings: allSettings.length,
-        activeProviders: allProviders.length,
-        providers: allProviders.map(p => ({
+      // Return the providers array with masked API keys
+      const providers = settings.providers || [];
+      return providers.map(provider => ({
+        ...provider,
+        apiKey: '********' // Mask API keys for security
+      }));
+
+      logger.info('Retrieved provider settings', {
+        userId,
+        totalProviders: providers.length,
+        activeProviders: providers.filter(p => p.isVerified && p.isActive).length,
+        providers: providers.map(p => ({
           provider: p.provider,
           isVerified: p.isVerified,
           isActive: p.isActive,
@@ -626,14 +600,14 @@ export class AISettingsService extends EventEmitter {
       });
 
       // Update hasActiveProviders flag based on the results
-      this.hasActiveProviders = allProviders.length > 0;
+      this.hasActiveProviders = providers.some(p => p.isVerified && p.isActive);
       
       // If we have active providers, ensure we broadcast the status
       if (this.hasActiveProviders) {
         this.broadcastStatus();
       }
 
-      return allProviders;
+      return providers;
     } catch (error) {
       logger.error('Failed to get all provider settings:', error);
       throw error instanceof AppError ? error : new AppError(500, 'Failed to get all provider settings');
@@ -711,6 +685,30 @@ export class AISettingsService extends EventEmitter {
     }
   }
 
+  async saveProviderSettings(
+    userId: string, 
+    provider: LLMProvider, 
+    settings: { apiKey: string; selectedModel?: string; isActive?: boolean }
+  ): Promise<AISettings> {
+    try {
+      logger.info(`Saving provider settings for ${provider}`, { userId });
+      
+      // Create provider config from settings
+      const config: AIProviderConfig = {
+        provider,
+        apiKey: settings.apiKey,
+        selectedModel: settings.selectedModel,
+        isActive: settings.isActive ?? true
+      };
+
+      // Use addProvider to handle the saving logic
+      return await this.addProvider(userId, config);
+    } catch (error) {
+      logger.error(`Failed to save provider settings for ${provider}:`, error);
+      throw error instanceof AppError ? error : new AppError(500, `Failed to save provider settings for ${provider}`);
+    }
+  }
+
   async verifyProvider(provider: LLMProvider, apiKey: string, userId: string): Promise<AIProviderConfig> {
     try {
       logger.info(`Verifying provider ${provider} for user ${userId}`);
@@ -778,18 +776,25 @@ export class AISettingsService extends EventEmitter {
       // Update active providers flag
       this.hasActiveProviders = true;
       
-      // Check and log service readiness
+      // Check service readiness but don't block on WebSocket
       const isReady = await this.isServiceReady();
-      logger.info('Service readiness after provider verification:', {
-        isReady,
-        provider,
-        userId,
-        providersCount: savedSettings.providers.length,
-        hasActiveProviders: this.hasActiveProviders
-      });
+      if (!isReady) {
+        logger.info('Provider verified but service not fully ready - WebSocket connection pending', {
+          provider,
+          userId,
+          providersCount: savedSettings.providers.length,
+          hasActiveProviders: this.hasActiveProviders,
+          wsConnected: this.wsConnected,
+          wsInitialized: this.wsInitialized
+        });
+      }
 
-      // Broadcast updated status
-      this.broadcastStatus();
+      // Try to broadcast status if WebSocket is available
+      if (this.wsService?.isInitialized()) {
+        this.broadcastStatus().catch(error => {
+          logger.warn('Failed to broadcast status after provider verification:', error);
+        });
+      }
 
       // Emit provider updated event
       this.emit('providerUpdated', userId);
@@ -806,6 +811,50 @@ export class AISettingsService extends EventEmitter {
         userId 
       });
       throw error instanceof AppError ? error : new AppError(500, 'Unknown error during provider verification');
+    }
+  }
+
+  async verifyProviderSettings(
+    userId: string,
+    provider: LLMProvider,
+    settings: { apiKey?: string }
+  ): Promise<{ success: boolean; error?: string; availableModels?: string[] }> {
+    try {
+      logger.info(`Verifying provider settings for ${provider}`, { userId });
+
+      // Get current settings to get the API key if not provided in settings
+      const currentSettings = await this.getSettings(userId);
+      const currentProvider = currentSettings.providers.find(p => p.provider === provider);
+      
+      // Use provided API key or get from current settings
+      const apiKey = settings.apiKey || currentProvider?.apiKey;
+      
+      if (!apiKey) {
+        throw new AppError(400, 'API key is required for verification');
+      }
+
+      // Use verifyProvider to do the actual verification
+      const verifiedConfig = await this.verifyProvider(provider, apiKey, userId);
+
+      // If we got here, the provider verification succeeded even if WebSocket isn't ready
+      // The WebSocket warning is handled in verifyProvider but shouldn't affect the result
+      if (verifiedConfig.isVerified) {
+        return {
+          success: true,
+          availableModels: verifiedConfig.availableModels
+        };
+      }
+
+      return {
+        success: false,
+        error: 'Provider verification failed'
+      };
+    } catch (error) {
+      logger.error(`Failed to verify provider settings for ${provider}:`, error);
+      return {
+        success: false,
+        error: error instanceof AppError ? error.message : 'Failed to verify provider settings'
+      };
     }
   }
 
@@ -859,7 +908,7 @@ export class AISettingsService extends EventEmitter {
     try {
       const settings = await this.aiSettingsRepository.find();
       return settings.some(setting => 
-        setting.providers.some(provider => 
+        setting.providers?.some(provider => 
           provider.isVerified && provider.isActive
         )
       );
