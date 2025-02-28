@@ -10,6 +10,7 @@ import { createSettingsRoutes } from './routes/settings.routes';
 import { createApiKeysRoutes } from './routes/apiKeys.routes';
 import { createCrudRoutes } from './routes/crud.routes';
 import { createHealthRoutes } from './routes/health.routes';
+import configRoutes from './routes/config.routes';
 import { errorHandler } from './middleware/errorHandler';
 import { requestTrackerMiddleware } from './middleware/requestTracker';
 import { authMiddleware } from './middleware/auth.middleware';
@@ -73,8 +74,9 @@ export async function createApp(wsService: WebSocketService) {
   app.set('wsService', wsService);
   app.set('appEngine', appEngine);
 
-  // Health check route (public)
+  // Health check and config routes (public)
   app.use('/health', createHealthRoutes());
+  app.use('/api/config', configRoutes);
 
   // Public routes
   app.use('/api/auth', createAuthRoutes(wsService));

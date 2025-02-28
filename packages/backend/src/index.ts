@@ -40,24 +40,32 @@ async function initializeLogging() {
 async function initializeDatabase() {
   const maxRetries = 5;
   let retries = 0;
+  const retryDelay = 2000; // 2 seconds
 
   while (retries < maxRetries) {
     try {
-      await setupDatabase();
+      if (!AppDataSource.isInitialized) {
+        logger.info('Initializing database connection...');
+        await AppDataSource.initialize();
+        logger.info('Database initialized successfully');
+      }
+
+      // Verify connection
+      await AppDataSource.query('SELECT 1');
+      logger.info('Database connection verified');
       return;
     } catch (error) {
       retries++;
-      logger.error(`Database connection attempt ${retries} failed:`, error);
+      logger.error(`Database initialization attempt ${retries} failed:`, error);
 
       if (retries < maxRetries) {
-        const delay = retries * 2000; // Exponential backoff
-        logger.info(`Waiting ${delay}ms before retry...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
+        logger.info(`Waiting ${retryDelay}ms before retry...`);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
       }
     }
   }
 
-  throw new Error(`Failed to establish database connection after ${maxRetries} attempts`);
+  throw new Error(`Failed to initialize database after ${maxRetries} attempts`);
 }
 
 async function initializeKafka() {
@@ -110,7 +118,8 @@ async function initializeServices(wsService: WebSocketService) {
     // Initialize AI service
     const aiService = new AIService();
     aiService.setWebSocketService(wsService);
-    logger.info('AI service initialized');
+    wsService.setAIService(aiService);
+    logger.info('AI service initialized and connected to WebSocket service');
 
     // Set up monitoring service with AI service
     monitoringService.setAIService(aiService);
@@ -138,8 +147,8 @@ async function initializeServices(wsService: WebSocketService) {
 
 async function startServer() {
   let server: ReturnType<typeof createServer> | undefined;
+  let wsService: WebSocketService | undefined;
   let adminAI: AdminAI | undefined;
-  let wsService: WebSocketService;
 
   const handleShutdown = async () => {
     logger.info('Shutting down server...');
@@ -155,7 +164,7 @@ async function startServer() {
       }
 
       // Shutdown WebSocket service
-      wsService.shutdown();
+      wsService?.shutdown();
 
       // Then shutdown AdminAI (which will handle all services)
       if (adminAI) {
@@ -182,7 +191,6 @@ async function startServer() {
 
     // Initialize database before anything else
     await initializeDatabase();
-    logger.info('Database initialized successfully');
 
     // Create base Express app
     const baseApp = express();

@@ -1,28 +1,97 @@
 import { Server, Socket } from 'socket.io';
 import { logger } from '../utils/logger';
 import { verifyToken } from '../utils/auth';
-import { AIMessage } from '../types/ai';
+import { AIMessage, AIMessageMetadata } from '@admin-ai/shared/src/types/ai';
 import { MonitoringService } from './monitoring.service';
 import { ErrorLog, SystemHealth, SystemMetrics } from '../types/metrics';
+import { AIService } from './ai.service';
+import { EventEmitter } from 'events';
 
-export class WebSocketService {
+export class WebSocketService extends EventEmitter {
   private static instance: WebSocketService;
   private io: Server | null = null;
   private userSockets: Map<string, Set<string>> = new Map();
   private monitoring: MonitoringService | null = null;
+  private aiService: AIService | null = null;
+  private isConnected: boolean = false;
+  private connectionCheckInterval: NodeJS.Timeout | null = null;
+  private server: any;
 
-  private constructor() {}
+  private constructor() {
+    super();
+    this.setupConnectionCheck();
+  }
+
+  private setupConnectionCheck(): void {
+    if (this.connectionCheckInterval) {
+      clearInterval(this.connectionCheckInterval);
+    }
+
+    this.connectionCheckInterval = setInterval(() => {
+      this.checkConnection();
+    }, 5000);
+  }
+
+  private async checkConnection(): Promise<void> {
+    try {
+      if (this.io && !this.isConnected) {
+        this.isConnected = true;
+        logger.info('WebSocket service is connected');
+        try {
+          this.emit('connected');
+        } catch (error) {
+          logger.error('Failed to emit connected event:', error);
+        }
+      }
+    } catch (error) {
+      if (this.isConnected) {
+        this.isConnected = false;
+        logger.error('WebSocket service connection lost:', error);
+        try {
+          this.emit('disconnected');
+        } catch (error) {
+          logger.error('Failed to emit disconnected event:', error);
+        }
+        this.attemptReconnect();
+      }
+    }
+  }
+
+  private attemptReconnect(): void {
+    if (!this.io) return;
+
+    try {
+      this.io.close();
+      this.io = null;
+      setTimeout(() => {
+        logger.info('Attempting to reconnect WebSocket service...');
+        this.initialize(this.server);
+      }, 5000);
+    } catch (error) {
+      logger.error('Failed to reconnect WebSocket service:', error);
+    }
+  }
 
   public static getInstance(): WebSocketService {
     if (!WebSocketService.instance) {
       WebSocketService.instance = new WebSocketService();
+      logger.info('WebSocket service instance created');
     }
     return WebSocketService.instance;
+  }
+
+  public isInitialized(): boolean {
+    return this.io !== null;
   }
 
   public setMonitoringService(monitoring: MonitoringService): void {
     this.monitoring = monitoring;
     this.setupMonitoringEvents();
+  }
+
+  public setAIService(aiService: AIService): void {
+    this.aiService = aiService;
+    logger.info('AI service set in WebSocket service');
   }
 
   public initialize(server: any): void {
@@ -31,17 +100,39 @@ export class WebSocketService {
       return;
     }
 
-    this.io = new Server(server, {
-      path: '/socket.io',
-      cors: {
-        origin: process.env.FRONTEND_URL || 'http://localhost:5173',
-        methods: ['GET', 'POST'],
-        credentials: true
-      }
-    });
+    try {
+      this.server = server;
+      this.io = new Server(server, {
+        path: '/socket.io',
+        cors: {
+          origin: process.env.NODE_ENV === 'production' 
+            ? process.env.FRONTEND_URL 
+            : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'],
+          methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+          credentials: true,
+          allowedHeaders: ['Content-Type', 'Authorization'],
+        },
+        allowEIO3: true,
+        transports: ['websocket', 'polling'],
+        pingTimeout: 10000,
+        pingInterval: 5000
+      });
 
-    this.setupEventHandlers();
-    logger.info('WebSocket service initialized');
+      this.setupEventHandlers();
+      logger.info('WebSocket service initialized with configuration:', {
+        path: '/socket.io',
+        origins: process.env.NODE_ENV === 'production' 
+          ? process.env.FRONTEND_URL 
+          : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'],
+        transports: ['websocket', 'polling']
+      });
+
+      // Verify connection immediately
+      this.checkConnection();
+    } catch (error) {
+      logger.error('Failed to initialize WebSocket service:', error);
+      throw error;
+    }
   }
 
   private setupEventHandlers(): void {
@@ -51,20 +142,36 @@ export class WebSocketService {
       try {
         const token = socket.handshake.auth.token;
         if (!token) {
-          return next(new Error('Authentication error'));
+          logger.warn('Authentication failed: No token provided');
+          return next(new Error('Authentication error: No token provided'));
         }
 
         const decoded = await verifyToken(token);
         socket.data.userId = decoded.userId;
+        logger.debug('Socket authenticated successfully', {
+          socketId: socket.id,
+          userId: decoded.userId
+        });
         next();
       } catch (error) {
-        next(new Error('Authentication error'));
+        logger.error('Socket authentication error:', error);
+        next(new Error('Authentication error: Invalid token'));
       }
     });
 
     this.io.on('connection', (socket: Socket) => {
       const userId = socket.data.userId;
-      logger.info(`Client connected: ${socket.id}`);
+      logger.info(`Client connected: ${socket.id}`, {
+        userId,
+        transport: socket.conn.transport.name
+      });
+
+      // Initialize AI service with user ID
+      if (this.aiService && userId) {
+        this.aiService.initialize(userId).catch(error => {
+          logger.error('Failed to initialize AI service:', error);
+        });
+      }
 
       // Track user's sockets
       if (!this.userSockets.has(userId)) {
@@ -72,8 +179,11 @@ export class WebSocketService {
       }
       this.userSockets.get(userId)?.add(socket.id);
 
-      socket.on('disconnect', () => {
-        logger.info(`Client disconnected: ${socket.id}`);
+      socket.on('disconnect', (reason) => {
+        logger.info(`Client disconnected: ${socket.id}`, {
+          userId,
+          reason
+        });
         this.userSockets.get(userId)?.delete(socket.id);
         if (this.userSockets.get(userId)?.size === 0) {
           this.userSockets.delete(userId);
@@ -85,6 +195,74 @@ export class WebSocketService {
         if (this.monitoring) {
           const status = await this.monitoring.getSystemStatus();
           this.sendToSocket(socket.id, 'metrics-updated', status);
+        }
+      });
+
+      // Handle errors
+      socket.on('error', (error) => {
+        logger.error('Socket error:', {
+          socketId: socket.id,
+          userId,
+          error
+        });
+      });
+
+      // Handle AI messages
+      socket.on('ai_message', async (message: { content: string }) => {
+        try {
+          if (!this.aiService) {
+            throw new Error('AI service not initialized');
+          }
+
+          const timestamp = new Date().toISOString();
+          
+          // Create user message
+          const userMessage: AIMessage = {
+            id: crypto.randomUUID(),
+            content: message.content,
+            role: 'user',
+            timestamp,
+            metadata: {
+              type: 'chat',
+              timestamp,
+              read: true
+            }
+          };
+
+          // Send user message to client
+          this.sendToUser(userId, {
+            type: 'ai_message',
+            data: userMessage
+          });
+
+          // Process the message and get AI response
+          const response = await this.aiService.processMessage(userMessage, userId);
+          
+          // Send the AI response
+          this.sendToUser(userId, {
+            type: 'ai_message',
+            data: response
+          });
+        } catch (error) {
+          logger.error('Failed to process AI message:', error);
+          const timestamp = new Date().toISOString();
+          const errorMessage: AIMessage = {
+            id: crypto.randomUUID(),
+            content: 'Sorry, I encountered an error. Please try again.',
+            role: 'system',
+            timestamp,
+            metadata: {
+              type: 'notification',
+              status: 'error',
+              category: 'ai',
+              timestamp,
+              read: false
+            }
+          };
+          this.sendToUser(userId, {
+            type: 'ai_message',
+            data: errorMessage
+          });
         }
       });
 
@@ -147,11 +325,18 @@ export class WebSocketService {
   }
 
   public shutdown(): void {
+    if (this.connectionCheckInterval) {
+      clearInterval(this.connectionCheckInterval);
+      this.connectionCheckInterval = null;
+    }
+    
     if (this.io) {
       this.io.close();
       this.io = null;
-      this.userSockets.clear();
     }
+    
+    this.isConnected = false;
+    logger.info('WebSocket service shut down');
   }
 }
 
