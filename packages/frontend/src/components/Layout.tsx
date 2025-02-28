@@ -31,6 +31,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { DynamicCrudMenu } from './DynamicCrudMenu';
 import { logger } from '../utils/logger';
+import { AIAssistantPanel } from './AIAssistantPanel';
 
 const drawerWidth = 240;
 
@@ -200,6 +201,7 @@ export const Layout: React.FC = () => {
       >
         <Outlet />
       </Box>
+      <AIAssistantPanel />
     </Box>
   );
 }; 

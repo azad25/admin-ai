@@ -16,7 +16,8 @@ import {
   Zoom,
   keyframes,
   SvgIcon,
-  Button
+  Button,
+  Stack
 } from '@mui/material';
 import {
   Chat as ChatIcon,
@@ -28,10 +29,13 @@ import {
   LightbulbOutlined,
   Terminal,
   Person as PersonIcon,
-  SmartToy as BotIcon
+  SmartToy as BotIcon,
+  ArrowForward as ArrowForwardIcon
 } from '@mui/icons-material';
 import { useAIMessages } from '../contexts/AIMessagesContext';
-import { AIMessage } from '../types/ai';
+import { AIMessage, AIMessageMetadata } from '@admin-ai/shared/src/types/ai';
+import { wsService } from '../services/websocket.service';
+import { AIStatusAlert } from './AIStatusAlert';
 
 // Define typing animation keyframes
 const typeAnimation = keyframes`
@@ -144,12 +148,12 @@ const TabPanel = (props: TabPanelProps) => {
 };
 
 const typeIcons = {
-  notification: NotificationsOutlined as typeof SvgIcon,
-  chat: ChatOutlined as typeof SvgIcon,
-  analysis: AnalyticsOutlined as typeof SvgIcon,
-  suggestion: LightbulbOutlined as typeof SvgIcon,
-  command: Terminal as typeof SvgIcon,
-};
+  notification: NotificationsOutlined,
+  chat: ChatOutlined,
+  analysis: AnalyticsOutlined,
+  suggestion: LightbulbOutlined,
+  command: Terminal,
+} as const;
 
 const statusColors = {
   success: 'success',
@@ -346,7 +350,7 @@ const Message: React.FC<MessageProps> = ({ message, onAnimationComplete }) => {
                 variant="caption" 
                 sx={{ color: alpha(theme.palette.text.secondary, 0.8) }}
               >
-                {new Date(message.metadata?.timestamp).toLocaleTimeString()}
+                {message.metadata?.timestamp ? new Date(message.metadata.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()}
               </Typography>
               {message.metadata?.actions && (
                 <Box sx={{ display: 'flex', gap: 1 }}>
@@ -455,7 +459,7 @@ const Message: React.FC<MessageProps> = ({ message, onAnimationComplete }) => {
             <PersonIcon sx={{ fontSize: 16, color: theme.palette.secondary.main }} />
           )}
           <Typography variant="caption" color="text.secondary">
-            {new Date(message.metadata?.timestamp).toLocaleTimeString()}
+            {message.metadata?.timestamp ? new Date(message.metadata.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString()}
           </Typography>
         </Box>
       </Box>
@@ -463,139 +467,119 @@ const Message: React.FC<MessageProps> = ({ message, onAnimationComplete }) => {
   );
 };
 
-export const AIAssistantPanel: React.FC = () => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [tabValue, setTabValue] = useState(0);
-  const [inputMessage, setInputMessage] = useState('');
-  const [isSending, setIsSending] = useState(false);
-  const [animatingMessages, setAnimatingMessages] = useState<Set<string>>(new Set());
-  const { messages, sendMessage, markMessageAsRead, unreadCount } = useAIMessages();
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const theme = useTheme();
+interface MessageBoxProps {
+  role: 'user' | 'assistant';
+  content: string;
+}
 
-  const messageCategories = {
-    all: messages,
-    chat: messages.filter(m => m.metadata.type === 'chat' || !m.metadata.type),
-    notifications: messages.filter(m => m.metadata.type === 'notification'),
-    analysis: messages.filter(m => m.metadata.type === 'analysis'),
-    suggestions: messages.filter(m => m.metadata.type === 'suggestion')
+const MessageBox: React.FC<MessageBoxProps> = ({ role, content }) => (
+  <Box
+    sx={{
+      alignSelf: role === 'user' ? 'flex-end' : 'flex-start',
+      maxWidth: '80%',
+      padding: 3,
+      borderRadius: 2,
+      backgroundColor: role === 'user' ? 'primary.main' : 'grey.100',
+      color: role === 'user' ? 'common.white' : 'text.primary'
+    }}
+  >
+    <Typography>{content}</Typography>
+  </Box>
+);
+
+interface SendButtonProps {
+  isDisabled: boolean;
+}
+
+const SendButton: React.FC<SendButtonProps> = ({ isDisabled }) => (
+  <IconButton
+    type="submit"
+    color="primary"
+    disabled={isDisabled}
+    aria-label="Send message"
+  >
+    <SendIcon />
+  </IconButton>
+);
+
+interface AIMessageType {
+  id?: string;
+  content: string;
+  role: 'user' | 'assistant';
+  metadata?: {
+    timestamp: string;
+    type?: string;
+    status?: 'success' | 'error' | 'info' | 'warning';
+    category?: string;
+    read?: boolean;
+    style?: {
+      icon?: string;
+    };
+    actions?: Array<{
+      label: string;
+      onClick?: () => void;
+    }>;
   };
+}
 
-  const handleMessageAnimationComplete = useCallback((messageId: string) => {
-    setAnimatingMessages(prev => {
-      const newAnimating = new Set(prev);
-      newAnimating.delete(messageId);
-      return newAnimating;
-    });
-    markMessageAsRead(messageId);
-  }, [markMessageAsRead]);
+export const AIAssistantPanel: React.FC = () => {
+  const theme = useTheme();
+  const [isOpen, setIsOpen] = useState(false);
+  const [inputMessage, setInputMessage] = useState('');
+  const [tabValue, setTabValue] = useState(0);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const { messages, sendMessage, markMessageAsRead } = useAIMessages();
 
-  const scrollToBottom = useCallback(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (isOpen) {
-      const newMessages = messages.filter(m => 
-        !m.metadata.read && 
-        !animatingMessages.has(m.id) && 
-        (m.role === 'assistant' || m.metadata.type === 'notification')
-      );
-      
-      if (newMessages.length > 0) {
-        setAnimatingMessages(prev => {
-          const newAnimating = new Set(prev);
-          newMessages.forEach(m => newAnimating.add(m.id));
-          return newAnimating;
-        });
-      }
-    }
-  }, [isOpen, messages, animatingMessages]);
-
-  useEffect(() => {
-    scrollToBottom();
-  }, [messages, scrollToBottom]);
-
-  const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
   };
 
-  const handleSendMessage = async () => {
-    if (!inputMessage.trim() || isSending) return;
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputMessage.trim()) return;
 
-    try {
-      setIsSending(true);
-      await sendMessage(inputMessage);
-      setInputMessage('');
-      scrollToBottom();
-    } catch (error) {
-      console.error('Failed to send message:', error);
-    } finally {
-      setIsSending(false);
-    }
+    await sendMessage(inputMessage);
+    setInputMessage('');
   };
 
-  const handleKeyPress = (event: React.KeyboardEvent) => {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      handleSendMessage();
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    if (isOpen) {
+      scrollToBottom();
     }
+  }, [messages, isOpen]);
+
+  const messageCategories = {
+    chat: messages.filter(m => m.metadata?.type === 'chat' || !m.metadata?.type),
+    all: messages,
+    system: messages.filter(m => m.role === 'system'),
+    alerts: messages.filter(m => m.metadata?.status === 'error' || m.metadata?.status === 'warning')
+  };
+
+  const getBadgeCount = (category: keyof typeof messageCategories) => {
+    return messageCategories[category].filter(m => !m.metadata?.read).length;
   };
 
   return (
     <>
-      <Box
+      <Fab
+        color="primary"
+        aria-label="ai-assistant"
+        onClick={() => setIsOpen(!isOpen)}
         sx={{
           position: 'fixed',
           bottom: 16,
           right: 16,
-          zIndex: theme.zIndex.drawer + 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'flex-end',
+          zIndex: 1000
         }}
       >
-        <Zoom in={unreadCount > 0} unmountOnExit>
-          <Badge
-            badgeContent={unreadCount}
-            color="error"
-            sx={{
-              position: 'absolute',
-              top: -10,
-              right: -10,
-              '& .MuiBadge-badge': {
-                animation: `${badgeAnimation} 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)`,
-                fontSize: '0.75rem',
-                minWidth: '20px',
-                height: '20px',
-                borderRadius: '10px',
-                boxShadow: `0 0 10px ${alpha(theme.palette.error.main, 0.5)}`,
-                transform: 'scale(1)',
-                transformOrigin: 'center',
-                transition: 'all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)',
-                '&:hover': {
-                  transform: 'scale(1.1)',
-                }
-              }
-            }}
-          />
-        </Zoom>
-        <Fab
-          color="primary"
-          aria-label="ai assistant"
-          onClick={() => setIsOpen(!isOpen)}
-          sx={{
-            transition: 'transform 0.2s ease-in-out',
-            '&:hover': {
-              transform: 'scale(1.05)',
-            },
-          }}
-        >
+        <Badge badgeContent={getBadgeCount('all')} color="error">
           <ChatIcon />
-        </Fab>
-      </Box>
+        </Badge>
+      </Fab>
 
       <Slide direction="up" in={isOpen} mountOnEnter unmountOnExit>
         <Paper
@@ -605,134 +589,100 @@ export const AIAssistantPanel: React.FC = () => {
             bottom: 80,
             right: 16,
             width: 360,
-            height: 600,
+            height: 500,
             display: 'flex',
             flexDirection: 'column',
-            zIndex: theme.zIndex.drawer + 1,
+            zIndex: 1000,
             borderRadius: 2,
-            overflow: 'hidden',
-            animation: `${panelSlideIn} 0.4s cubic-bezier(0.34, 1.56, 0.64, 1)`,
-            transformOrigin: 'bottom right',
-            boxShadow: theme.shadows[8],
-            '&::before': {
-              content: '""',
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: 'linear-gradient(to bottom, rgba(255,255,255,0.1), rgba(255,255,255,0))',
-              borderRadius: 'inherit',
-              pointerEvents: 'none',
-            }
+            overflow: 'hidden'
           }}
         >
-          <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', px: 2, py: 1 }}>
-              <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                AI Assistant
-              </Typography>
-              <IconButton size="small" onClick={() => setIsOpen(false)}>
+          <Box sx={{ p: 2, borderBottom: 1, borderColor: 'divider' }}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Typography variant="h6">AI Assistant</Typography>
+              <IconButton onClick={() => setIsOpen(false)} size="small">
                 <CloseIcon />
               </IconButton>
-            </Box>
-            <Tabs 
-              value={tabValue} 
-              onChange={handleTabChange} 
-              variant="scrollable" 
-              scrollButtons="auto"
-              sx={{
-                minHeight: 40,
-                '& .MuiTab-root': {
-                  minHeight: 40,
-                  textTransform: 'capitalize',
-                  fontSize: '0.875rem',
+            </Stack>
+            <AIStatusAlert />
+          </Box>
+
+          <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+            <Tabs value={tabValue} onChange={handleTabChange} variant="fullWidth">
+              <Tab 
+                icon={<ChatIcon />} 
+                label="Chat"
+              />
+              <Tab 
+                icon={
+                  <Badge badgeContent={getBadgeCount('all')} color="error">
+                    <NotificationsOutlined />
+                  </Badge>
                 }
+                label="All"
+              />
+              <Tab 
+                icon={
+                  <Badge badgeContent={getBadgeCount('system')} color="error">
+                    <Terminal />
+                  </Badge>
+                }
+                label="System"
+              />
+              <Tab 
+                icon={
+                  <Badge badgeContent={getBadgeCount('alerts')} color="error">
+                    <AnalyticsOutlined />
+                  </Badge>
+                }
+                label="Alerts"
+              />
+            </Tabs>
+
+            <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+              {Object.entries(messageCategories).map(([category, msgs], index) => (
+                <TabPanel key={category} value={tabValue} index={index}>
+                  {msgs.map((message, i) => (
+                    <Message
+                      key={message.id || i}
+                      message={message}
+                      onAnimationComplete={() => markMessageAsRead(message.id)}
+                    />
+                  ))}
+                  <div ref={messagesEndRef} />
+                </TabPanel>
+              ))}
+            </Box>
+
+            <Box
+              component="form"
+              onSubmit={handleSubmit}
+              sx={{
+                p: 2,
+                borderTop: 1,
+                borderColor: 'divider',
+                backgroundColor: theme.palette.background.paper
               }}
             >
-              {Object.entries(messageCategories).map(([category], index) => (
-                <Tab
-                  key={category}
-                  label={
-                    <Box sx={{ position: 'relative', px: 1 }}>
-                      {category.charAt(0).toUpperCase() + category.slice(1)}
-                      {unreadCount > 0 && (
-                        <Box
-                          sx={{
-                            position: 'absolute',
-                            top: -8,
-                            right: -8,
-                            backgroundColor: theme.palette.error.main,
-                            color: theme.palette.error.contrastText,
-                            borderRadius: '50%',
-                            width: 16,
-                            height: 16,
-                            fontSize: '0.75rem',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
-                        >
-                          {unreadCount}
-                        </Box>
-                      )}
-                    </Box>
-                  }
+              <Stack direction="row" spacing={1}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  value={inputMessage}
+                  onChange={(e) => setInputMessage(e.target.value)}
+                  placeholder="Type your message..."
+                  variant="outlined"
                 />
-              ))}
-            </Tabs>
-          </Box>
-
-          <Box 
-            sx={{ 
-              flex: 1, 
-              overflow: 'auto', 
-              bgcolor: 'background.default',
-              px: 2,
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            {Object.entries(messageCategories)[tabValue]?.[1].map((message) => (
-              <Message
-                key={message.id}
-                message={message}
-                onAnimationComplete={() => handleMessageAnimationComplete(message.id)}
-              />
-            ))}
-            <div ref={messagesEndRef} />
-          </Box>
-
-          {tabValue === 1 && (
-            <Box sx={{ p: 2, borderTop: 1, borderColor: 'divider', bgcolor: 'background.paper' }}>
-              <TextField
-                fullWidth
-                size="small"
-                placeholder="Type a message..."
-                value={inputMessage}
-                onChange={(e) => setInputMessage(e.target.value)}
-                onKeyPress={handleKeyPress}
-                disabled={isSending}
-                sx={{
-                  '& .MuiOutlinedInput-root': {
-                    borderRadius: 2,
-                  }
-                }}
-                InputProps={{
-                  endAdornment: (
-                    <IconButton
-                      size="small"
-                      onClick={handleSendMessage}
-                      disabled={!inputMessage.trim() || isSending}
-                      color="primary"
-                    >
-                      {isSending ? <CircularProgress size={20} /> : <SendIcon />}
-                    </IconButton>
-                  ),
-                }}
-              />
+                <IconButton
+                  type="submit"
+                  color="primary"
+                  disabled={!inputMessage.trim()}
+                >
+                  <SendIcon />
+                </IconButton>
+              </Stack>
             </Box>
-          )}
+          </Box>
         </Paper>
       </Slide>
     </>

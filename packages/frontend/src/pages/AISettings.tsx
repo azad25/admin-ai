@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Box,
   Button,
@@ -32,10 +32,12 @@ import {
   ModelTraining as ModelIcon
 } from '@mui/icons-material';
 import { ErrorBoundary } from '../components/ErrorBoundary';
-import { useAi } from '../contexts/AiContext';
-import { useSnackbar } from '../contexts/SnackbarContext';
+import { useSnackbar } from 'notistack';
 import { aiSettingsService } from '../services/aiSettings';
 import { LLMProvider, AIProviderConfig } from '@admin-ai/shared/src/types/ai';
+import { AIStatusAlert } from '../components/AIStatusAlert';
+import { wsService } from '../services/websocket.service';
+import { useAuth } from '../contexts/AuthContext';
 
 interface AIProvider {
   id: LLMProvider;
@@ -95,35 +97,40 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [isLoadingKey, setIsLoadingKey] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { showError } = useSnackbar();
+  const { enqueueSnackbar } = useSnackbar();
+  const loadingKeyRef = useRef(false);
 
   // Load initial state from config
   useEffect(() => {
     if (config) {
       setIsActive(config.isActive || false);
       setSelectedModel(config.selectedModel || provider.defaultModel);
-      loadApiKey();
+      if (config.apiKey && !loadingKeyRef.current) {
+        loadApiKey();
+      }
     }
   }, [config]);
 
   const loadApiKey = async () => {
-    if (!config?.apiKey) return;
+    if (!config?.apiKey || loadingKeyRef.current) return;
     
     try {
+      loadingKeyRef.current = true;
       setIsLoadingKey(true);
       setError(null);
       const key = await aiSettingsService.getDecryptedApiKey(provider.id);
       setApiKey(key);
     } catch (error) {
-      showError('Failed to load API key');
+      enqueueSnackbar('Failed to load API key', { variant: 'error' });
       setError('Failed to load API key');
     } finally {
       setIsLoadingKey(false);
+      loadingKeyRef.current = false;
     }
   };
 
   const handleSave = async () => {
-    if (!apiKey.trim()) return;
+    if (!apiKey.trim() || isSaving) return;
 
     try {
       setIsSaving(true);
@@ -142,13 +149,14 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
       await onVerify();
     } catch (error) {
       setError('Failed to save settings');
-      showError('Failed to save settings');
+      enqueueSnackbar('Failed to save settings', { variant: 'error' });
     } finally {
       setIsSaving(false);
     }
   };
 
   const handleVerify = async () => {
+    if (isVerifying) return;
     try {
       setIsVerifying(true);
       setError(null);
@@ -161,6 +169,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
   };
 
   const handleActiveToggle = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (isSaving) return;
     try {
       setIsSaving(true);
       setError(null);
@@ -180,7 +189,7 @@ const ProviderCard: React.FC<ProviderCardProps> = ({
       }
     } catch (error) {
       setError('Failed to update active state');
-      showError('Failed to update active state');
+      enqueueSnackbar('Failed to update active state', { variant: 'error' });
     } finally {
       setIsSaving(false);
     }
@@ -297,14 +306,44 @@ export const AISettings: React.FC = () => {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const { showSuccess, showError } = useSnackbar();
+  const { enqueueSnackbar } = useSnackbar();
+  const loadingRef = useRef(false);
+  const [verifying, setVerifying] = useState<boolean>(false);
+  const auth = useAuth();
+
+  if (!auth) {
+    throw new Error('Auth context is required');
+  }
+  const { user } = auth;
 
   useEffect(() => {
-    loadSettings();
-  }, []);
+    // Handle WebSocket notifications
+    const handleNotification = (notification: any) => {
+      if (notification.metadata?.source?.page === 'AI Settings') {
+        if (notification.metadata.status === 'success') {
+          enqueueSnackbar(notification.content, { variant: 'success' });
+        } else if (notification.metadata.status === 'error') {
+          enqueueSnackbar(notification.content, { variant: 'error' });
+        }
+      }
+    };
+
+    wsService.on('notification', handleNotification);
+    
+    if (!loadingRef.current) {
+      loadSettings();
+    }
+
+    return () => {
+      loadingRef.current = false;
+      wsService.off('notification', handleNotification);
+    };
+  }, [enqueueSnackbar]);
 
   const loadSettings = async () => {
+    if (loadingRef.current) return;
     try {
+      loadingRef.current = true;
       console.log('Loading AI settings...');
       setLoading(true);
       setError(null);
@@ -333,9 +372,10 @@ export const AISettings: React.FC = () => {
     } catch (error: any) {
       console.error('Failed to load AI settings:', error);
       setError(error?.message || 'Failed to load AI settings. Please try again later.');
-      showError(error?.message || 'Failed to load AI settings');
+      enqueueSnackbar(error?.message || 'Failed to load AI settings', { variant: 'error' });
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
   };
 
@@ -350,28 +390,44 @@ export const AISettings: React.FC = () => {
         ...prev,
         [provider]: config,
       }));
-      showSuccess('Settings saved successfully');
+      enqueueSnackbar('Settings saved successfully', { variant: 'success' });
     } catch (error) {
-      showError('Failed to save settings');
+      enqueueSnackbar('Failed to save settings', { variant: 'error' });
       throw error;
     }
   };
 
   const handleVerify = async (provider: LLMProvider) => {
     try {
+      setVerifying(true);
       const result = await aiSettingsService.verifyProvider(provider);
-      setProviderConfigs((prev) => ({
-        ...prev,
-        [provider]: {
-          ...prev[provider]!,
-          isVerified: result.isVerified,
-          availableModels: result.availableModels,
-        },
-      }));
-      showSuccess('API key verified successfully');
+      
+      if (result.isVerified && user) {
+        // Send a greeting message through the WebSocket
+        wsService.send('ai_message', {
+          content: 'Hello! I am your AI assistant. How can I help you today?',
+          userId: user.id
+        });
+
+        // Show success notification
+        enqueueSnackbar(`${provider} verified successfully`, { variant: 'success' });
+        
+        // Trigger AI assistant panel animation
+        const event = new CustomEvent('show-ai-assistant', {
+          detail: { animate: true }
+        });
+        window.dispatchEvent(event);
+      }
+
+      await loadSettings();
     } catch (error) {
-      showError('Failed to verify API key');
-      throw error;
+      console.error('Failed to verify provider:', error);
+      enqueueSnackbar(
+        error instanceof Error ? error.message : 'Failed to verify provider',
+        { variant: 'error' }
+      );
+    } finally {
+      setVerifying(false);
     }
   };
 
@@ -382,9 +438,9 @@ export const AISettings: React.FC = () => {
         ...prev,
         [provider]: null,
       }));
-      showSuccess('Settings deleted successfully');
+      enqueueSnackbar('Settings deleted successfully', { variant: 'success' });
     } catch (error) {
-      showError('Failed to delete settings');
+      enqueueSnackbar('Failed to delete settings', { variant: 'error' });
     }
   };
 
@@ -413,26 +469,27 @@ export const AISettings: React.FC = () => {
   }
 
   return (
-    <Container sx={{ mt: 4 }}>
-      <Typography variant="h4" gutterBottom>
-        AI Settings
-      </Typography>
-      <Typography color="textSecondary" paragraph>
-        Configure your AI providers and API keys
-      </Typography>
-      <Grid container spacing={3}>
-        {providers.map((provider) => (
-          <Grid item xs={12} md={6} lg={4} key={provider.id}>
-            <ProviderCard
-              provider={provider}
-              config={providerConfigs[provider.id]}
-              onSave={(settings) => handleSave(provider.id, settings)}
-              onVerify={() => handleVerify(provider.id)}
-              onDelete={() => handleDelete(provider.id)}
-            />
-          </Grid>
-        ))}
-      </Grid>
+    <Container sx={{ py: 8 }}>
+      <Stack spacing={6}>
+        <Box mb={4}>
+          <Typography variant="h4" gutterBottom>AI Provider Settings</Typography>
+          <AIStatusAlert />
+        </Box>
+        
+        <Grid container spacing={3}>
+          {providers.map((provider) => (
+            <Grid item xs={12} md={6} lg={4} key={provider.id}>
+              <ProviderCard
+                provider={provider}
+                config={providerConfigs[provider.id]}
+                onSave={(settings) => handleSave(provider.id, settings)}
+                onVerify={() => handleVerify(provider.id)}
+                onDelete={() => handleDelete(provider.id)}
+              />
+            </Grid>
+          ))}
+        </Grid>
+      </Stack>
     </Container>
   );
 };

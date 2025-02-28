@@ -13,6 +13,7 @@ export interface User {
 
 export interface AuthContextType {
   user: User | null;
+  isAuthenticated: boolean;
   loading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
@@ -21,15 +22,7 @@ export interface AuthContextType {
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType>({
-  user: null,
-  loading: false,
-  error: null,
-  login: async () => {},
-  logout: async () => {},
-  register: async () => {},
-  changePassword: async () => {},
-});
+const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const useAuth = () => useContext(AuthContext);
 
@@ -67,6 +60,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
         // Set up WebSocket with the token after user is confirmed
         wsService.setToken(token);
+        wsService.connect(); // Explicitly connect after setting token
 
         // If we're on the login page but already authenticated, redirect to home
         // Only redirect if we have a valid user and we're not in the process of refreshing
@@ -242,6 +236,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthContext.Provider
       value={{
         user,
+        isAuthenticated: !!user,
         loading,
         error,
         login,

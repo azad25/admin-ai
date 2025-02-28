@@ -28,6 +28,9 @@ export const authService = {
         throw new Error('Invalid response format from server');
       }
       
+      // Store the token
+      this.setToken(data.token);
+      
       logger.debug('Login successful:', { user: data.user });
       return data;
     } catch (error: any) {
@@ -42,18 +45,29 @@ export const authService = {
 
   async getCurrentUser(): Promise<User> {
     try {
-      const token = localStorage.getItem('auth_token');
+      const token = this.getToken();
       if (!token) {
         throw new Error('No authentication token found');
       }
 
-      const { data } = await api.get<User>('/auth/me');
+      const { data, headers } = await api.get<User>('/auth/me');
+      
+      // Check for token refresh
+      const newToken = headers['x-new-token'];
+      if (newToken) {
+        this.setToken(newToken);
+      }
+
       if (!data || !data.id) {
         throw new Error('Invalid user data received from server');
       }
 
       return data;
     } catch (error: any) {
+      // If token is invalid or expired, clear it
+      if (error?.response?.status === 401) {
+        this.setToken(null);
+      }
       logger.error('Failed to get current user:', {
         status: error?.response?.status,
         data: error?.response?.data,

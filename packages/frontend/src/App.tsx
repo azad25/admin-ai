@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -7,6 +7,8 @@ import { createTheme } from '@mui/material/styles';
 import { SnackbarProvider as NotistackProvider } from 'notistack';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { logger } from './utils/logger';
+import { AIMessage } from '@admin-ai/shared/src/types/ai';
+import { wsService } from './services/websocket.service';
 
 // Contexts
 import { AuthProvider } from './contexts/AuthContext';
@@ -29,16 +31,34 @@ import CrudPages from './pages/CrudPages';
 import ApiKeys from './pages/ApiKeys';
 import Settings from './pages/Settings';
 import { CrudPage } from './pages/CrudPage';
-import { AIAssistantPanel } from './components/AIAssistantPanel';
 import { RequireAuth } from './components/RequireAuth';
+import { AIAssistant } from './components/AIAssistant';
 
 export function App() {
   const theme = React.useMemo(() => createTheme(getThemeOptions('light')), []); // Default theme
+  const [aiMessages, setAiMessages] = useState<AIMessage[]>([]);
+  const [isAiLoading, setIsAiLoading] = useState(false);
 
   React.useEffect(() => {
     logger.debug('App mounted');
     return () => {
       logger.debug('App unmounted');
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleAiMessage = (message: AIMessage) => {
+      setAiMessages(prev => [...prev, message]);
+    };
+
+    wsService.on('ai:message', handleAiMessage);
+    wsService.on('ai:start', () => setIsAiLoading(true));
+    wsService.on('ai:end', () => setIsAiLoading(false));
+
+    return () => {
+      wsService.off('ai:message', handleAiMessage);
+      wsService.off('ai:start', () => {});
+      wsService.off('ai:end', () => {});
     };
   }, []);
 
@@ -79,7 +99,6 @@ export function App() {
                               {/* Catch-all route */}
                               <Route path="*" element={<Navigate to="/" replace />} />
                             </Routes>
-                            <AIAssistantPanel />
                           </ErrorBoundary>
                         </CrudPagesProvider>
                       </CrudProvider>
@@ -89,6 +108,11 @@ export function App() {
               </SocketProvider>
             </AuthProvider>
           </CustomThemeProvider>
+          <AIAssistant 
+            messages={aiMessages}
+            isLoading={isAiLoading}
+            onClose={() => setAiMessages([])}
+          />
         </NotistackProvider>
       </ThemeProvider>
     </ErrorBoundary>

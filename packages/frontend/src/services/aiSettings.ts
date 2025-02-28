@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { LLMProvider, AIProviderConfig } from '@admin-ai/shared/src/types/ai';
+import { authService } from './auth';
+import { logger } from '../utils/logger';
 
 const api = axios.create({
   baseURL: '/api/settings/providers',
@@ -13,30 +15,34 @@ const api = axios.create({
 // Add request interceptor for authentication
 api.interceptors.request.use(
   (config) => {
-    const token = localStorage.getItem('token');
+    const token = authService.getToken();
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
     return config;
   },
   (error) => {
-    console.error('Request interceptor error:', error);
+    logger.error('Request interceptor error:', error);
     return Promise.reject(error);
   }
 );
 
 // Add response interceptor for error handling
 api.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    console.error('API Error:', error);
-    if (error.response?.status === 401) {
-      // Handle unauthorized access
-      localStorage.removeItem('token');
-      window.location.href = '/login';
+  (response) => {
+    // Check for token refresh header
+    const newToken = response.headers['x-new-token'];
+    if (newToken) {
+      authService.setToken(newToken);
     }
-    if (error.code === 'ECONNABORTED') {
-      return Promise.reject('Request timed out. Please try again.');
+    return response;
+  },
+  async (error) => {
+    logger.error('API Error:', error);
+    if (error.response?.status === 401) {
+      // Let the auth service handle the token removal and redirection
+      authService.setToken(null);
+      window.dispatchEvent(new Event('auth-error'));
     }
     return Promise.reject(error.response?.data?.error || error.message || 'An error occurred');
   }

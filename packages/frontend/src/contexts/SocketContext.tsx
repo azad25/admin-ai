@@ -5,19 +5,29 @@ import { WebSocketService, wsService } from '../services/websocket.service';
 
 interface SocketContextType {
   isConnected: boolean;
+  socket: WebSocketService;
   sendNotification: (message: AIMessage) => void;
 }
 
-const SocketContext = createContext<SocketContextType>({
-  isConnected: false,
-  sendNotification: () => {},
-});
+const SocketContext = createContext<SocketContextType | undefined>(undefined);
 
-export const useSocket = () => useContext(SocketContext);
+export const useSocket = () => {
+  const context = useContext(SocketContext);
+  if (!context) {
+    throw new Error('useSocket must be used within a SocketProvider');
+  }
+  return context;
+};
 
 export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isConnected, setIsConnected] = useState(false);
-  const { user } = useAuth();
+  const auth = useAuth();
+  
+  if (!auth) {
+    throw new Error('SocketProvider must be used within an AuthProvider');
+  }
+
+  const { user, isAuthenticated } = auth;
 
   const sendNotification = useCallback((message: AIMessage) => {
     if (isConnected) {
@@ -28,21 +38,17 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [isConnected]);
 
   useEffect(() => {
-    let reconnectTimeout: NodeJS.Timeout;
     let isCleanedUp = false;
+    let reconnectTimeout: NodeJS.Timeout;
 
-    const setupWebSocket = () => {
-      if (isCleanedUp) return;
+    const setupWebSocket = async () => {
+      if (isCleanedUp || !isAuthenticated || !user) return;
 
-      const token = localStorage.getItem('token');
-      if (!token || !user) {
-        wsService.disconnect();
-        setIsConnected(false);
-        return;
+      try {
+        await wsService.connect();
+      } catch (error) {
+        console.error('Failed to connect WebSocket:', error);
       }
-
-      wsService.setToken(token);
-      wsService.connect();
     };
 
     const handleConnect = () => {
@@ -56,8 +62,7 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setIsConnected(false);
       console.warn('WebSocket disconnected');
 
-      const token = localStorage.getItem('token');
-      if (user && token) {
+      if (isAuthenticated && user) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(setupWebSocket, 3000);
       }
@@ -68,48 +73,38 @@ export const SocketProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       console.error('WebSocket error:', error);
       setIsConnected(false);
 
-      const token = localStorage.getItem('token');
-      if (user && token) {
+      if (isAuthenticated && user) {
         clearTimeout(reconnectTimeout);
         reconnectTimeout = setTimeout(setupWebSocket, 3000);
       }
     };
 
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'token') {
-        if (!e.newValue) {
-          wsService.disconnect();
-          setIsConnected(false);
-        } else if (user) {
-          setupWebSocket();
-        }
-      }
-    };
+    if (isAuthenticated && user) {
+      wsService.on('connected', handleConnect);
+      wsService.on('disconnected', handleDisconnect);
+      wsService.on('error', handleError);
 
-    wsService.on('connected', handleConnect);
-    wsService.on('disconnected', handleDisconnect);
-    wsService.on('error', handleError);
-    window.addEventListener('storage', handleStorageChange);
-
-    // Initial setup
-    const token = localStorage.getItem('token');
-    if (user && token && !isConnected) {
       setupWebSocket();
+    } else {
+      wsService.disconnect();
+      setIsConnected(false);
     }
 
     return () => {
       isCleanedUp = true;
       clearTimeout(reconnectTimeout);
-      wsService.removeAllListeners('connected');
-      wsService.removeAllListeners('disconnected');
-      wsService.removeAllListeners('error');
-      window.removeEventListener('storage', handleStorageChange);
-      wsService.disconnect();
+      wsService.off('connected', handleConnect);
+      wsService.off('disconnected', handleDisconnect);
+      wsService.off('error', handleError);
     };
-  }, [user, isConnected]);
+  }, [user, isAuthenticated]);
 
   return (
-    <SocketContext.Provider value={{ isConnected, sendNotification }}>
+    <SocketContext.Provider value={{ 
+      isConnected,
+      socket: wsService,
+      sendNotification
+    }}>
       {children}
     </SocketContext.Provider>
   );
