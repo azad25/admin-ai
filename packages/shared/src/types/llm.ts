@@ -1,4 +1,4 @@
-export type LLMProvider = 'openai' | 'gemini' | 'anthropic';
+import { LLMProvider } from './common.js';
 
 export interface LLMConfig {
   provider: LLMProvider;

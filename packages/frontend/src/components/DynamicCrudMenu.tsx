@@ -91,7 +91,7 @@ export const DynamicCrudMenu: React.FC<DynamicCrudMenuProps> = ({ onNavigate }) 
   };
 
   const handlePageClick = (path: string) => {
-    navigate(path);
+    navigate(`/crud/${path}`);
     if (onNavigate) {
       onNavigate();
     }
@@ -259,7 +259,7 @@ export const DynamicCrudMenu: React.FC<DynamicCrudMenuProps> = ({ onNavigate }) 
             pages.map((page) => (
               <ListItemButton
                 key={page.id}
-                onClick={() => handlePageClick(`/crud-pages/${page.id}`)}
+                onClick={() => handlePageClick(`${page.id}`)}
                 sx={{ pl: 4 }}
               >
                 <ListItemIcon>

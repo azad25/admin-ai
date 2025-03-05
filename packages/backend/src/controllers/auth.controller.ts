@@ -8,6 +8,7 @@ import { CreateUserSchema } from '@admin-ai/shared';
 import { logger, authLogger } from '../utils/logger';
 import { systemMetricsService } from '../services/systemMetrics.service';
 import { WebSocketService } from '../services/websocket.service';
+import { RequestWithUser } from '../types/express';
 
 const userRepository = AppDataSource.getRepository(User);
 
@@ -84,10 +85,11 @@ class AuthController {
       });
 
       // Send notification for successful registration
-      this.wsService.sendToUser(user.id, {
+      this.wsService.sendToUser(user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Welcome ${name}! Your account has been created successfully.`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'success',
@@ -98,7 +100,7 @@ class AuthController {
             action: 'register',
             details: { email }
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -113,10 +115,11 @@ class AuthController {
     } catch (error) {
       // Send error notification if we have a user ID
       if (error instanceof AppError && req.user?.id) {
-        this.wsService.sendToUser(req.user.id, {
+        this.wsService.sendToUser(req.user.id, 'ai:message', {
           id: crypto.randomUUID(),
           content: `Registration failed: ${error.message}`,
           role: 'system',
+          timestamp: new Date().toISOString(),
           metadata: {
             type: 'notification',
             status: 'error',
@@ -126,7 +129,7 @@ class AuthController {
               controller: 'AuthController',
               action: 'register'
             },
-            timestamp: Date.now(),
+            timestamp: new Date().toISOString(),
             read: false
           }
         });
@@ -140,7 +143,7 @@ class AuthController {
     }
   };
 
-  login = async (req: Request, res: Response, next: NextFunction) => {
+  login = async (req: RequestWithUser, res: Response, next: NextFunction) => {
     try {
       const { email, password } = req.body;
 
@@ -173,6 +176,38 @@ class AuthController {
 
       // Remove password from response
       const { password: _, ...userWithoutPassword } = user;
+
+      try {
+        // Initialize AI providers for the user
+        const aiService = req.app.get('aiService');
+        if (aiService) {
+          await aiService.initializeProvidersForUser(user.id);
+          logger.info('AI providers initialized for user after login', { userId: user.id });
+        }
+      } catch (error) {
+        // Log error but don't fail login
+        logger.error('Failed to initialize AI providers for user:', error);
+      }
+
+      // Send notification for successful login
+      this.wsService.sendToUser(user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Welcome back, ${user.name}!`,
+        role: 'system',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'auth',
+          source: {
+            page: 'Authentication',
+            controller: 'AuthController',
+            action: 'login'
+          },
+          timestamp: new Date().toISOString(),
+          read: false
+        }
+      });
 
       // Send response
       return res.status(200).json({
@@ -207,7 +242,7 @@ class AuthController {
     }
   };
 
-  changePassword = async (req: Request, res: Response) => {
+  changePassword = async (req: RequestWithUser, res: Response) => {
     const { oldPassword, newPassword } = req.body;
 
     const user = await userRepository.findOne({
@@ -230,11 +265,12 @@ class AuthController {
 
     await userRepository.save(user);
 
-    // Send notification for password change
-    this.wsService.sendToUser(user.id, {
+    // Send notification for successful password change
+    this.wsService.sendToUser(user.id, 'ai:message', {
       id: crypto.randomUUID(),
-      content: 'Your password has been updated successfully.',
+      content: 'Your password has been changed successfully.',
       role: 'system',
+      timestamp: new Date().toISOString(),
       metadata: {
         type: 'notification',
         status: 'success',
@@ -244,7 +280,7 @@ class AuthController {
           controller: 'AuthController',
           action: 'changePassword'
         },
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
         read: false
       }
     });
@@ -252,7 +288,7 @@ class AuthController {
     res.json({ message: 'Password updated successfully' });
   };
 
-  logout = async (req: Request, res: Response) => {
+  logout = async (req: RequestWithUser, res: Response) => {
     // Log logout event
     const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || 
                req.socket.remoteAddress || 
@@ -267,21 +303,22 @@ class AuthController {
       location: getLocationFromRequest(req)
     });
 
-    // Send notification for logout
-    this.wsService.sendToUser(req.user.id, {
+    // Send notification for successful logout
+    this.wsService.sendToUser(req.user.id, 'ai:message', {
       id: crypto.randomUUID(),
       content: 'You have been logged out successfully.',
       role: 'system',
+      timestamp: new Date().toISOString(),
       metadata: {
         type: 'notification',
-        status: 'info',
+        status: 'success',
         category: 'auth',
         source: {
           page: 'Authentication',
           controller: 'AuthController',
           action: 'logout'
         },
-        timestamp: Date.now(),
+        timestamp: new Date().toISOString(),
         read: false
       }
     });

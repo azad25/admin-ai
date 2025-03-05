@@ -1,6 +1,8 @@
 import React, { createContext, useContext } from 'react';
 import { useSocket } from './SocketContext';
 import { alpha } from '@mui/material/styles';
+import { v4 as uuidv4 } from 'uuid';
+import { logger } from '../utils/logger';
 
 interface NotificationOptions {
   category?: string;
@@ -67,28 +69,27 @@ export const SnackbarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       : '';
     
     const formattedMessage = sourceInfo ? `${sourceInfo} ${message}` : message;
+    
+    logger.debug('Creating notification:', { message: formattedMessage, status, options });
 
-    sendNotification({
-      id: crypto.randomUUID(),
+    // Create notification object
+    const notification = {
+      id: uuidv4(),
       content: formattedMessage,
-      role: 'system',
+      role: 'system' as const,
       metadata: {
-        type: 'notification',
+        type: 'notification' as const,
         status,
         category: options?.category || 'system',
         source: options?.source,
         priority: options?.priority || 'medium',
-        timestamp: Date.now(),
+        timestamp: new Date(Date.now()).toISOString(),
         read: false,
         style: {
           icon: style.icon,
           color: style.color,
           background: style.background,
-          animation: {
-            enter: 'slideIn',
-            exit: 'slideOut',
-            duration: 0.5,
-          },
+          animation: 'slideIn',
         },
         actions: options?.actions || [
           {
@@ -97,7 +98,16 @@ export const SnackbarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           },
         ],
       },
-    });
+      timestamp: new Date(Date.now()).toISOString(),
+    };
+
+    // Send notification to AI panel via socket
+    try {
+      sendNotification(notification);
+      logger.debug('Notification sent to AI panel:', notification.id);
+    } catch (error) {
+      logger.error('Failed to send notification:', error);
+    }
   };
 
   const value = {

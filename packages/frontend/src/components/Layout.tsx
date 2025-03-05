@@ -25,9 +25,10 @@ import {
   DarkMode as DarkIcon,
   Logout as LogoutIcon,
   SmartToy as AIIcon,
-  Key as KeyIcon
+  Key as KeyIcon,
+  SettingsInputComponent as SettingsInputComponentIcon
 } from '@mui/icons-material';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme } from '../providers/ThemeProvider';
 import { useAuth } from '../contexts/AuthContext';
 import { DynamicCrudMenu } from './DynamicCrudMenu';
 import { logger } from '../utils/logger';
@@ -44,7 +45,7 @@ interface MenuItem {
 
 export const Layout: React.FC = () => {
   const muiTheme = useMuiTheme();
-  const { mode, toggleTheme } = useTheme();
+  const { theme, toggleTheme } = useTheme();
   const { logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
@@ -71,15 +72,17 @@ export const Layout: React.FC = () => {
   };
 
   const menuItems: MenuItem[] = [
-    { text: 'Home', icon: <HomeIcon />, path: '/' },
+    { text: 'Home', icon: <HomeIcon />, path: '/home' },
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
-    { text: 'AI Dashboard', icon: <AIIcon />, path: '/ai-dashboard' },
+    { text: 'AI Dashboard', icon: <AIIcon />, path: '/ai' },
     { divider: true },
-    { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud-pages' },
+    { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud' },
     { text: 'API Keys', icon: <KeyIcon />, path: '/api-keys' },
     { divider: true },
-    { text: 'AI Settings', icon: <SettingsIcon />, path: '/ai-settings' },
-    { text: 'Settings', icon: <SettingsIcon />, path: '/settings' }
+    { text: 'AI Settings', icon: <SettingsIcon />, path: '/ai/settings' },
+    { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
+    { divider: true },
+    { text: 'WebSocket Test', icon: <SettingsInputComponentIcon />, path: '/websocket-test' }
   ];
 
   const handleNavigation = (path: string) => {
@@ -148,7 +151,7 @@ export const Layout: React.FC = () => {
             {menuItems.find(item => item.path === location.pathname)?.text || 'Admin AI'}
           </Typography>
           <IconButton color="inherit" onClick={toggleTheme}>
-            {mode === 'dark' ? <LightIcon /> : <DarkIcon />}
+            {theme === 'dark' ? <LightIcon /> : <DarkIcon />}
           </IconButton>
           <IconButton color="inherit" onClick={handleLogout}>
             <LogoutIcon />

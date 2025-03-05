@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Typography,
@@ -25,7 +25,7 @@ import {
 } from '@mui/material';
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon } from '@mui/icons-material';
 import { CreateCrudPageData } from '../types/crud';
-import { useCrud } from '../contexts/CrudContext';
+import { useCrudPages } from '../contexts/CrudPagesContext';
 import { useAuth } from '../contexts/AuthContext';
 
 const FIELD_TYPES = [
@@ -73,8 +73,8 @@ interface ExtendedCrudPage {
   updatedAt: string;
 }
 
-export default function CrudPages() {
-  const { pages, loading, createPage, updatePage, deletePage } = useCrud();
+export const CrudPages: React.FC = () => {
+  const { pages, loading, createPage, updatePage, deletePage } = useCrudPages();
   const [openDialog, setOpenDialog] = useState(false);
   const [editingPage, setEditingPage] = useState<ExtendedCrudPage | null>(null);
   const [formData, setFormData] = useState<CreateCrudPageData>({

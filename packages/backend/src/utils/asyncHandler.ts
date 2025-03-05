@@ -5,7 +5,7 @@ type AsyncFunction<T extends Request = Request> = (
   req: T,
   res: Response,
   next: NextFunction
-) => Promise<any>;
+) => Promise<unknown>;
 
 // Type guard to check if request has user
 function isRequestWithUser(req: Request): req is RequestWithUser {
@@ -26,4 +26,4 @@ export const asyncHandler = <T extends Request = Request>(
       next(error);
     }
   };
-}; 
+};

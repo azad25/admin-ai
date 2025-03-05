@@ -39,4 +39,17 @@ export const AuditLogSchema = BaseLogSchema.extend({
   details: z.record(z.unknown()).optional(),
 });
 
-export type AuditLog = z.infer<typeof AuditLogSchema>; 
+export type AuditLog = z.infer<typeof AuditLogSchema>;
+
+export interface LogEntry {
+  id: string;
+  timestamp: string;
+  level: 'info' | 'warn' | 'error' | 'debug';
+  message: string;
+  metadata: {
+    userId?: string;
+    source?: string;
+    category?: string;
+    details?: Record<string, any>;
+  };
+} 

@@ -31,4 +31,13 @@ export class ApiKey {
 
   @Column({ type: 'timestamp with time zone', nullable: true })
   lastUsed?: Date;
+  
+  @Column({ type: 'timestamp with time zone', nullable: true })
+  expiresAt?: Date;
+  
+  @Column('simple-json', { nullable: true })
+  permissions?: string[];
+  
+  @Column({ default: true })
+  isActive!: boolean;
 } 

@@ -6,19 +6,41 @@ import { asyncHandler } from '../utils/asyncHandler';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { cacheMiddleware } from '../middleware/cache.middleware';
 import { RequestWithUser } from '../types/express';
+import { User } from '../database/entities/User';
+import { ParamsDictionary } from 'express-serve-static-core';
+import { ParsedQs } from 'qs';
 
-// Helper function to wrap controller methods
+// Helper function to ensure request has user and return user ID
+const ensureUser = (req: Request): string => {
+  if (!req.user) {
+    throw new Error('User not authenticated');
+  }
+  return req.user.id;
+};
+
+// Helper function to create cache key with prefix
+const createCacheKey = (prefix: string) => (req: Request): string => {
+  try {
+    const userId = ensureUser(req);
+    const queryParams = Object.entries(req.query)
+      .map(([key, value]) => `${key}:${value}`)
+      .join(':');
+    return `${prefix}:${queryParams}:${userId}`;
+  } catch (error) {
+    // Fallback if user is not available
+    return `${prefix}:${req.originalUrl}`;
+  }
+};
+
+// Helper function to wrap controller methods with proper typing
 const wrapController = (
-  fn: (req: RequestWithUser, res: Response) => Promise<void | Response>
+  fn: (req: RequestWithUser, res: Response) => Promise<void>
 ) => {
-  return async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      // Since we're using authMiddleware.requireAuth, we can safely assert the request has a user
-      await fn(req as RequestWithUser, res);
-    } catch (error) {
-      next(error);
-    }
-  };
+  return asyncHandler(async (req, res, next) => {
+    // The asyncHandler will check for authentication with requireAuth=true
+    // and throw an error if user is not authenticated
+    await fn(req as RequestWithUser, res);
+  }, true);
 };
 
 export function createMetricsRoutes(wsService: WebSocketService) {
@@ -26,58 +48,51 @@ export function createMetricsRoutes(wsService: WebSocketService) {
   const aiService = new AIService();
   const metricsController = new MetricsController(aiService, wsService);
 
-  // All routes require authentication
-  router.use(authMiddleware.requireAuth);
-
-  // Health and system metrics with caching
+  // Health endpoint should be public (no auth required)
   router.get('/health', 
     cacheMiddleware({ 
       ttl: 30,
-      key: (req) => `metrics:health:${req.user?.id || 'anonymous'}`
+      key: (req: Request): string => `health:${req.originalUrl}`
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getSystemHealth(req, res);
-    }, true)
+    asyncHandler(async (req, res) => {
+      await metricsController.getSystemHealth(req as RequestWithUser, res);
+    }, false) // false means don't require auth
   );
 
+  // All other routes require authentication
+  router.use(authMiddleware.requireAuth);
+
+  // Health and system metrics with caching
   router.get('/system', 
     cacheMiddleware({ 
       ttl: 60,
-      key: (req) => `metrics:system:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('system')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getSystemMetrics(req, res);
-    }, true)
+    wrapController(metricsController.getSystemMetrics)
   );
 
   router.get('/requests', 
     cacheMiddleware({ 
       ttl: 300,
-      key: (req) => `metrics:requests:${req.query.from}:${req.query.to}:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('requests')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getRequestMetrics(req, res);
-    }, true)
+    wrapController(metricsController.getRequestMetrics)
   );
 
   router.get('/locations', 
     cacheMiddleware({ 
       ttl: 600,
-      key: (req) => `metrics:locations:${req.query.period}:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('locations')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getLocationHeatmap(req, res);
-    }, true)
+    wrapController(metricsController.getLocationHeatmap)
   );
 
   router.get('/ai', 
     cacheMiddleware({ 
       ttl: 120,
-      key: (req) => `metrics:ai:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('ai')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getAIMetrics(req, res);
-    }, true)
+    wrapController(metricsController.getAIMetrics)
   );
 
   // Insights routes with conditional caching
@@ -85,63 +100,51 @@ export function createMetricsRoutes(wsService: WebSocketService) {
     cacheMiddleware({ 
       ttl: 300,
       condition: (req) => !req.query.realtime,
-      key: (req) => `metrics:insights:performance:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('insights:performance')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getPerformanceInsights(req, res);
-    }, true)
+    wrapController(metricsController.getPerformanceInsights)
   );
 
   router.get('/insights/security', 
     cacheMiddleware({ 
       ttl: 300,
-      key: (req) => `metrics:insights:security:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('insights:security')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getSecurityInsights(req, res);
-    }, true)
+    wrapController(metricsController.getSecurityInsights)
   );
 
   router.get('/insights/usage', 
     cacheMiddleware({ 
       ttl: 600,
-      key: (req) => `metrics:insights:usage:${req.query.period}:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('insights:usage')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getUsageInsights(req, res);
-    }, true)
+    wrapController(metricsController.getUsageInsights)
   );
 
   // Logs routes with short-lived caching
   router.get('/logs/recent', 
     cacheMiddleware({ 
       ttl: 30,
-      key: (req) => `metrics:logs:recent:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('logs:recent')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getRecentLogs(req, res);
-    }, true)
+    wrapController(metricsController.getRecentLogs)
   );
 
   router.get('/logs/errors', 
     cacheMiddleware({ 
       ttl: 60,
-      key: (req) => `metrics:logs:errors:${req.query.severity}:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('logs:errors')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getRecentErrors(req, res);
-    }, true)
+    wrapController(metricsController.getRecentErrors)
   );
 
   router.get('/logs/auth', 
     cacheMiddleware({ 
       ttl: 120,
-      key: (req) => `metrics:logs:auth:${req.query.type}:${req.user?.id || 'anonymous'}`
+      key: createCacheKey('logs:auth')
     }),
-    asyncHandler<RequestWithUser>(async (req, res) => {
-      return metricsController.getAuthLogs(req, res);
-    }, true)
+    wrapController(metricsController.getAuthLogs)
   );
 
   return router;
-} 
+}

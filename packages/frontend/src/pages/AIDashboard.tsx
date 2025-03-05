@@ -46,7 +46,7 @@ export const AIDashboard: React.FC = () => {
         performanceData,
         securityData,
         usageData,
-      ] = await Promise.all([
+      ] = await Promise.allSettled([
         metricsService.getSystemHealth(),
         metricsService.getSystemMetrics(),
         metricsService.getRequestMetrics(),
@@ -56,13 +56,23 @@ export const AIDashboard: React.FC = () => {
         metricsService.getUsageInsights(),
       ]);
 
-      setHealth(healthData);
-      setMetrics(metricsData);
-      setRequestMetrics(requestMetricsData);
-      setLocations(locationsData);
-      setPerformanceInsights(performanceData);
-      setSecurityInsights(securityData);
-      setUsageInsights(usageData);
+      // Set data only if the promise was fulfilled
+      if (healthData.status === 'fulfilled') setHealth(healthData.value);
+      if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
+      if (requestMetricsData.status === 'fulfilled') setRequestMetrics(Array.isArray(requestMetricsData.value) ? requestMetricsData.value : []);
+      if (locationsData.status === 'fulfilled') setLocations(Array.isArray(locationsData.value) ? locationsData.value : []);
+      if (performanceData.status === 'fulfilled') setPerformanceInsights(performanceData.value);
+      if (securityData.status === 'fulfilled') setSecurityInsights(securityData.value);
+      if (usageData.status === 'fulfilled') setUsageInsights(usageData.value);
+
+      // Log any errors
+      [healthData, metricsData, requestMetricsData, locationsData, performanceData, securityData, usageData]
+        .filter(result => result.status === 'rejected')
+        .forEach(result => {
+          if (result.status === 'rejected') {
+            console.error('Error fetching dashboard data:', result.reason);
+          }
+        });
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
     }

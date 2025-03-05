@@ -29,7 +29,7 @@ export class ErrorBoundary extends Component<Props, State> {
       return (
         <Box
           sx={{
-            p: 3,
+            padding: 3,
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',

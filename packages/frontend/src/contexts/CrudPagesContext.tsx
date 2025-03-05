@@ -1,6 +1,9 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { CreateCrudPageData, crudPageService, CrudPage } from '../services/crudPages';
 import { useSnackbar } from '../contexts/SnackbarContext';
+import { authService } from '../services/auth';
+import { useAuth } from './AuthContext';
+import { logger } from '../utils/logger';
 
 interface CrudPagesContextType {
   pages: CrudPage[];
@@ -27,15 +30,21 @@ export const CrudPagesProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { showSuccess, showError } = useSnackbar();
+  const { user } = useAuth();
 
   const loadPages = async () => {
+    if (!authService.isAuthenticated()) {
+      setLoading(false);
+      return;
+    }
+    
     try {
       setLoading(true);
       setError(null);
       const fetchedPages = await crudPageService.getCrudPages();
       setPages(fetchedPages);
     } catch (err) {
-      console.error('Failed to load CRUD pages:', err);
+      logger.error('Failed to load CRUD pages:', err);
       setError('Failed to load CRUD pages');
       showError('Failed to load CRUD pages');
     } finally {
@@ -44,8 +53,12 @@ export const CrudPagesProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   };
 
   useEffect(() => {
-    loadPages();
-  }, []);
+    if (user) {
+      loadPages();
+    } else {
+      setLoading(false);
+    }
+  }, [user]);
 
   const refreshPages = async () => {
     await loadPages();

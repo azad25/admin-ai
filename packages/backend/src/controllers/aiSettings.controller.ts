@@ -1,17 +1,28 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
+import { RequestWithUser } from '../types/express';
 import { AISettingsService } from '../services/aiSettings.service';
 import { LLMProvider } from '@admin-ai/shared/src/types/ai';
 import { logger } from '../utils/logger';
 import { WebSocketService } from '../services/websocket.service';
-import { AppError } from '../middleware/errorHandler';
-import crypto from 'crypto';
+import { AppError } from '../utils/error';
+import * as crypto from 'crypto';
 
-const aiSettingsService = new AISettingsService();
+// Initialize the service - use a variable to store the promise
+const aiSettingsServicePromise = AISettingsService.getInstance();
+
+// Helper function to get the service instance
+const getService = async () => {
+  return await aiSettingsServicePromise;
+};
 
 export const aiSettingsController = {
-  async getProviderSettings(req: Request, res: Response) {
+  async getProviderSettings(req: RequestWithUser, res: Response) {
     try {
       const { provider } = req.params;
+      
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
       const settings = await aiSettingsService.getProviderSettings(
         req.user.id,
         provider as LLMProvider
@@ -19,7 +30,7 @@ export const aiSettingsController = {
 
       // Send notification for successful settings retrieval
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Retrieved settings for ${provider} provider`,
         role: 'system',
@@ -33,9 +44,9 @@ export const aiSettingsController = {
             action: 'getProviderSettings',
             details: { provider }
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
 
       res.json(settings);
@@ -44,9 +55,9 @@ export const aiSettingsController = {
 
       // Send error notification
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: `Failed to retrieve ${req.params.provider} provider settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        content: `Failed to retrieve settings for ${req.params.provider} provider: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
         metadata: {
           type: 'notification',
@@ -55,11 +66,12 @@ export const aiSettingsController = {
           source: {
             page: 'AI Settings',
             controller: 'AISettingsController',
-            action: 'getProviderSettings'
+            action: 'getProviderSettings',
+            details: { provider: req.params.provider }
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
 
       if (error instanceof AppError) throw error;
@@ -67,9 +79,13 @@ export const aiSettingsController = {
     }
   },
 
-  async getDecryptedApiKey(req: Request, res: Response) {
+  async getDecryptedApiKey(req: RequestWithUser, res: Response) {
     try {
       const { provider } = req.params;
+      
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
       const apiKey = await aiSettingsService.getDecryptedApiKey(
         req.user.id,
         provider as LLMProvider
@@ -86,17 +102,16 @@ export const aiSettingsController = {
     }
   },
 
-  async getAllProviderSettings(req: Request, res: Response) {
+  async getAllProviderSettings(req: RequestWithUser, res: Response) {
     try {
-      if (!req.user?.id) {
-        throw new AppError(401, 'Authentication required');
-      }
-
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
       const settings = await aiSettingsService.getAllProviderSettings(req.user.id);
 
       // Send notification for successful settings retrieval
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: 'Retrieved all provider settings',
         role: 'system',
@@ -109,36 +124,34 @@ export const aiSettingsController = {
             controller: 'AISettingsController',
             action: 'getAllProviderSettings'
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
 
       res.json(settings);
     } catch (error) {
       logger.error('Failed to get all provider settings:', error);
 
-      if (req.user?.id) {
-        // Send error notification if we have a user
-        const wsService: WebSocketService = req.app.get('wsService');
-        wsService.sendToUser(req.user.id, {
-          id: crypto.randomUUID(),
-          content: `Failed to retrieve provider settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          role: 'system',
-          metadata: {
-            type: 'notification',
-            status: 'error',
-            category: 'system',
-            source: {
-              page: 'AI Settings',
-              controller: 'AISettingsController',
-              action: 'getAllProviderSettings'
-            },
-            timestamp: Date.now(),
-            read: false
-          }
-        });
-      }
+      // Send error notification if we have a user
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Failed to retrieve provider settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'error',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'getAllProviderSettings'
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
 
       if (error instanceof AppError) {
         res.status(error.statusCode).json({ error: error.message });
@@ -148,7 +161,7 @@ export const aiSettingsController = {
     }
   },
 
-  async saveProviderSettings(req: Request, res: Response) {
+  async saveProviderSettings(req: RequestWithUser, res: Response) {
     try {
       const { provider } = req.params;
       const { apiKey, selectedModel, isActive } = req.body;
@@ -156,67 +169,225 @@ export const aiSettingsController = {
       if (!apiKey) {
         return res.status(400).json({ error: 'API key is required' });
       }
-
+      
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
       const settings = await aiSettingsService.saveProviderSettings(
         req.user.id,
         provider as LLMProvider,
         { apiKey, selectedModel, isActive }
       );
 
+      // Send notification for successful settings save
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Saved settings for ${provider} provider`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'saveProviderSettings',
+            details: { provider }
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+
       res.json(settings);
     } catch (error) {
       logger.error('Failed to save provider settings:', error);
-      res.status(500).json({ error: 'Failed to save provider settings' });
+      
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Failed to save settings for ${req.params.provider} provider: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'error',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'saveProviderSettings',
+            details: { provider: req.params.provider }
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: 'Failed to save provider settings' });
+      }
     }
   },
 
-  async verifyProvider(req: Request, res: Response) {
+  async verifyProvider(req: RequestWithUser, res: Response) {
     try {
-      const { provider } = req.body;
+      const { provider, apiKey } = req.body;
       
       if (!provider) {
         return res.status(400).json({ error: 'Provider is required' });
       }
+      
+      if (!apiKey) {
+        return res.status(400).json({ error: 'API key is required' });
+      }
 
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
       const result = await aiSettingsService.verifyProvider(
-        req.user.id,
-        provider as LLMProvider
+        provider as LLMProvider,
+        apiKey,
+        req.user.id
       );
+
+      // Send notification for successful verification
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Verified ${provider} provider successfully`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'verifyProvider',
+            details: { provider }
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+
       res.json(result);
     } catch (error) {
       logger.error('Failed to verify provider:', error);
-      res.status(500).json({ error: 'Failed to verify provider' });
+      
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Failed to verify ${req.body.provider} provider: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'error',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'verifyProvider',
+            details: { provider: req.body.provider }
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: 'Failed to verify provider' });
+      }
     }
   },
 
-  async deleteProviderSettings(req: Request, res: Response) {
+  async deleteProviderSettings(req: RequestWithUser, res: Response) {
     try {
       const { provider } = req.params;
+      
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
       await aiSettingsService.deleteProviderSettings(
         req.user.id,
         provider as LLMProvider
       );
-      res.status(204).send();
+
+      // Send notification for successful deletion
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Deleted settings for ${provider} provider`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'deleteProviderSettings',
+            details: { provider }
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+
+      res.json({ success: true });
     } catch (error) {
       logger.error('Failed to delete provider settings:', error);
-      res.status(500).json({ error: 'Failed to delete provider settings' });
+      
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Failed to delete settings for ${req.params.provider} provider: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'error',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'deleteProviderSettings',
+            details: { provider: req.params.provider }
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: 'Failed to delete provider settings' });
+      }
     }
   },
 
-  async updateProviderSettings(req: Request, res: Response) {
+  async updateProviderSettings(req: RequestWithUser, res: Response) {
     try {
       const { provider } = req.params;
-      const settings = req.body;
+      const updates = req.body;
+      
+      // Get the service instance
+      const aiSettingsService = await getService();
       
       await aiSettingsService.updateProviderSettings(
         req.user.id,
         provider as LLMProvider,
-        settings
+        updates
       );
 
-      // Send notification for successful settings update
+      // Send notification for successful update
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Updated settings for ${provider} provider`,
         role: 'system',
@@ -230,20 +401,19 @@ export const aiSettingsController = {
             action: 'updateProviderSettings',
             details: { provider }
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
 
-      res.json({ message: 'Settings updated successfully' });
+      res.json({ success: true });
     } catch (error) {
       logger.error('Failed to update provider settings:', error);
-
-      // Send error notification
+      
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: `Failed to update ${req.params.provider} provider settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        content: `Failed to update settings for ${req.params.provider} provider: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
         metadata: {
           type: 'notification',
@@ -252,40 +422,45 @@ export const aiSettingsController = {
           source: {
             page: 'AI Settings',
             controller: 'AISettingsController',
-            action: 'updateProviderSettings'
+            action: 'updateProviderSettings',
+            details: { provider: req.params.provider }
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
-
-      if (error instanceof AppError) throw error;
-      throw new AppError(500, 'Failed to update provider settings');
+      
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: 'Failed to update provider settings' });
+      }
     }
   },
 
-  async verifyProviderSettings(req: Request, res: Response) {
+  async verifyProviderSettings(req: RequestWithUser, res: Response) {
     try {
       const { provider } = req.params;
-      const settings = req.body;
+      const { apiKey } = req.body;
+      
+      // Get the service instance
+      const aiSettingsService = await getService();
       
       const verificationResult = await aiSettingsService.verifyProviderSettings(
         req.user.id,
         provider as LLMProvider,
-        settings
+        { apiKey }
       );
 
-      // Send notification based on verification result
+      // Send notification for successful verification
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: verificationResult.success 
-          ? `Successfully verified ${provider} provider settings`
-          : `Failed to verify ${provider} provider settings: ${verificationResult.error}`,
+        content: `Verified settings for ${provider} provider`,
         role: 'system',
         metadata: {
           type: 'notification',
-          status: verificationResult.success ? 'success' : 'error',
+          status: 'success',
           category: 'system',
           source: {
             page: 'AI Settings',
@@ -293,20 +468,19 @@ export const aiSettingsController = {
             action: 'verifyProviderSettings',
             details: { provider }
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
 
       res.json(verificationResult);
     } catch (error) {
       logger.error('Failed to verify provider settings:', error);
-
-      // Send error notification
+      
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: `Failed to verify ${req.params.provider} provider settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        content: `Failed to verify settings for ${req.params.provider} provider: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
         metadata: {
           type: 'notification',
@@ -315,15 +489,83 @@ export const aiSettingsController = {
           source: {
             page: 'AI Settings',
             controller: 'AISettingsController',
-            action: 'verifyProviderSettings'
+            action: 'verifyProviderSettings',
+            details: { provider: req.params.provider }
           },
-          timestamp: Date.now(),
-          read: false
-        }
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+      
+      if (error instanceof AppError) {
+        res.status(error.statusCode).json({ error: error.message });
+      } else {
+        res.status(500).json({ error: 'Failed to verify provider settings' });
+      }
+    }
+  },
+
+  async getAISettings(req: RequestWithUser, res: Response) {
+    try {
+      // Get the service instance
+      const aiSettingsService = await getService();
+      
+      // Get all provider settings for the user
+      const settings = await aiSettingsService.getAllProviderSettings(req.user.id);
+      
+      // Get additional AI settings if needed
+      const aiSettings = {
+        providers: settings,
+        // Add any other AI-related settings here
+      };
+
+      // Send notification for successful settings retrieval
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: 'Retrieved AI settings',
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'getAISettings'
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
+      });
+
+      // Wrap the response in a settings property to match frontend expectations
+      res.json({ settings: aiSettings });
+    } catch (error) {
+      logger.error('Failed to get AI settings:', error);
+
+      // Send error notification
+      const wsService: WebSocketService = req.app.get('wsService');
+      wsService.sendToUser(req.user.id, 'ai:message', {
+        id: crypto.randomUUID(),
+        content: `Failed to retrieve AI settings: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'system',
+        metadata: {
+          type: 'notification',
+          status: 'error',
+          category: 'system',
+          source: {
+            page: 'AI Settings',
+            controller: 'AISettingsController',
+            action: 'getAISettings'
+          },
+          timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString()
       });
 
       if (error instanceof AppError) throw error;
-      throw new AppError(500, 'Failed to verify provider settings');
+      throw new AppError(500, 'Failed to get AI settings');
     }
   }
 }; 

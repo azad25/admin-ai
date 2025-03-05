@@ -5,7 +5,45 @@ import { useSpring, animated } from '@react-spring/three';
 import { Vector3 } from 'three';
 import { Box, Grid, Paper, Typography } from '@mui/material';
 import { wsService } from '../services/websocket.service';
-import { ErrorLog, SystemHealth, SystemMetrics, AIAnalysis } from '@admin-ai/shared/src/types/metrics';
+import { SystemHealth, SystemMetrics } from '@admin-ai/shared/types/metrics';
+import { ErrorLog } from '@admin-ai/shared/types/error';
+import { AIAnalysis } from '@admin-ai/shared/types/ai';
+
+// Define additional interfaces needed for the component
+interface AIInsight {
+  type: 'critical' | 'warning' | 'info';
+  message: string;
+  recommendation?: string;
+  autoFix?: {
+    description: string;
+  };
+}
+
+interface TrendData {
+  current: number;
+  change: number;
+  status: 'improving' | 'degrading' | 'stable';
+}
+
+// Extended AIAnalysis interface to match what's used in the component
+interface ExtendedAIAnalysis {
+  performance: {
+    cpuAnalysis: {
+      status: string;
+      trend: 'up' | 'down' | 'stable';
+      recommendations: string[];
+    };
+    memoryAnalysis: {
+      status: string;
+      trend: 'up' | 'down' | 'stable';
+      recommendations: string[];
+    };
+    recommendations: string[];
+  };
+  trends: Record<string, any>; // Using any to avoid complex type issues
+  insights: AIInsight[];
+  errors?: Record<string, any>;
+}
 
 interface ErrorNode {
   position: [number, number, number];
@@ -45,7 +83,11 @@ const ErrorNode = ({ error, position, onHover }: { error: ErrorLog; position: [n
       }}
     >
       <sphereGeometry args={[0.5, 32, 32]} />
-      <meshStandardMaterial color={error.severity === 'high' ? '#ff0000' : error.severity === 'medium' ? '#ffa500' : '#ffff00'} />
+      <meshStandardMaterial color={
+        error.metadata.severity === 'high' ? '#ff0000' : 
+        error.metadata.severity === 'medium' ? '#ffa500' : 
+        '#ffff00'
+      } />
     </animated.mesh>
   );
 };
@@ -54,27 +96,55 @@ const AIMonitoringDashboard: React.FC = () => {
   const [errors, setErrors] = useState<ErrorLog[]>([]);
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
-  const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
+  const [analysis, setAnalysis] = useState<ExtendedAIAnalysis | null>(null);
   const [hoveredError, setHoveredError] = useState<ErrorLog | null>(null);
   const [errorNodes, setErrorNodes] = useState<ErrorNode[]>([]);
 
   useEffect(() => {
+    // Request initial metrics
+    wsService.emit('metrics:request');
+
+    // Listen for metric updates
     const handleMetricsUpdate = (data: any) => {
       if (data.health) setHealth(data.health);
       if (data.metrics) setMetrics(data.metrics);
-      if (data.aiAnalysis) setAnalysis(data.aiAnalysis);
+      if (data.aiAnalysis) setAnalysis(data.aiAnalysis as ExtendedAIAnalysis);
     };
 
-    const handleError = (error: ErrorLog) => {
+    // Listen for new errors
+    const handleNewError = (error: ErrorLog) => {
       setErrors(prev => [error, ...prev].slice(0, 100));
     };
 
-    wsService.on('metrics-updated', handleMetricsUpdate);
-    wsService.on('error-logged', handleError);
+    // Listen for error analysis
+    const handleErrorAnalysis = (data: { error: ErrorLog, analysis: any }) => {
+      setAnalysis(prev => {
+        if (!prev) return null;
+        return {
+          ...prev,
+          errors: {
+            ...(prev.errors || {}),
+            [data.error.id]: data.analysis
+          }
+        };
+      });
+    };
+
+    // Listen for metric analysis
+    const handleMetricsAnalysis = (analysis: ExtendedAIAnalysis) => {
+      setAnalysis(analysis);
+    };
+
+    wsService.on('metrics:update', handleMetricsUpdate);
+    wsService.on('error:new', handleNewError);
+    wsService.on('error:analysis', handleErrorAnalysis);
+    wsService.on('metrics:analysis', handleMetricsAnalysis);
 
     return () => {
-      wsService.off('metrics-updated', handleMetricsUpdate);
-      wsService.off('error-logged', handleError);
+      wsService.off('metrics:update', handleMetricsUpdate);
+      wsService.off('error:new', handleNewError);
+      wsService.off('error:analysis', handleErrorAnalysis);
+      wsService.off('metrics:analysis', handleMetricsAnalysis);
     };
   }, []);
 
@@ -85,12 +155,12 @@ const AIMonitoringDashboard: React.FC = () => {
       const radius = 5;
       const x = Math.cos(angle) * radius;
       const z = Math.sin(angle) * radius;
-      const y = error.severity === 'high' ? 2 : error.severity === 'medium' ? 1 : 0;
+      const y = error.metadata.severity === 'high' ? 2 : error.metadata.severity === 'medium' ? 1 : 0;
 
       return {
         position: [x, y, z] as [number, number, number],
-        color: error.severity === 'high' ? '#ff0000' : error.severity === 'medium' ? '#ffa500' : '#ffff00',
-        size: error.severity === 'high' ? 0.8 : error.severity === 'medium' ? 0.6 : 0.4,
+        color: error.metadata.severity === 'high' ? '#ff0000' : error.metadata.severity === 'medium' ? '#ffa500' : '#ffff00',
+        size: error.metadata.severity === 'high' ? 0.8 : error.metadata.severity === 'medium' ? 0.6 : 0.4,
         error
       };
     });
@@ -112,7 +182,13 @@ const AIMonitoringDashboard: React.FC = () => {
               <mesh position={[0, 0, 0]}>
                 <cylinderGeometry args={[3, 3, 0.1, 32]} />
                 <meshStandardMaterial 
-                  color={health.status === 'healthy' ? '#00ff00' : health.status === 'degraded' ? '#ffa500' : '#ff0000'} 
+                  color={
+                    health.services && Object.values(health.services).some(s => s.status === 'down') 
+                      ? '#ff0000' 
+                      : health.services && Object.values(health.services).some(s => s.status === 'degraded') 
+                        ? '#ffa500' 
+                        : '#00ff00'
+                  } 
                   opacity={0.3} 
                   transparent 
                 />
@@ -137,7 +213,7 @@ const AIMonitoringDashboard: React.FC = () => {
                   fontSize={0.5}
                   color="#ffffff"
                 >
-                  {`Requests: ${metrics.requests.total} | Errors: ${metrics.requests.failed}`}
+                  {`Requests: ${metrics.totalRequests} | Errors: ${metrics.errorCount}`}
                 </Text>
               </group>
             )}
@@ -152,13 +228,13 @@ const AIMonitoringDashboard: React.FC = () => {
                 right: 16,
                 backgroundColor: 'rgba(0,0,0,0.8)',
                 color: 'white',
-                padding: 2,
+                p: 2,
                 borderRadius: 1,
                 maxWidth: 300
               }}
             >
               <Typography variant="h6">Error Details</Typography>
-              <Typography>Severity: {hoveredError.severity}</Typography>
+              <Typography>Severity: {hoveredError.metadata.severity}</Typography>
               <Typography>Message: {hoveredError.message}</Typography>
               <Typography>Time: {new Date(hoveredError.timestamp).toLocaleString()}</Typography>
             </Box>
@@ -169,7 +245,7 @@ const AIMonitoringDashboard: React.FC = () => {
       <Grid item xs={12} md={4}>
         <Paper sx={{ p: 2, height: '70vh', overflow: 'auto' }}>
           <Typography variant="h6">AI Analysis</Typography>
-          {analysis?.insights.map((insight, i) => (
+          {analysis?.insights && analysis.insights.map((insight: AIInsight, i: number) => (
             <Box key={i} sx={{ mb: 2 }}>
               <Typography color={
                 insight.type === 'critical' ? 'error' : 
@@ -194,20 +270,38 @@ const AIMonitoringDashboard: React.FC = () => {
           {analysis?.trends && (
             <>
               <Typography variant="h6" sx={{ mt: 2 }}>Trends</Typography>
-              {Object.entries(analysis.trends).map(([key, trend]) => (
-                <Box key={key} sx={{ mb: 1 }}>
-                  <Typography>
-                    {key}: {trend.current} ({trend.change > 0 ? '+' : ''}{trend.change}%)
-                  </Typography>
-                  <Typography variant="body2" color={
-                    trend.status === 'improving' ? 'success.main' :
-                    trend.status === 'degrading' ? 'error.main' :
-                    'text.secondary'
-                  }>
-                    Status: {trend.status}
-                  </Typography>
-                </Box>
-              ))}
+              {Object.entries(analysis.trends).map(([key, trend]) => {
+                // Ensure trend is treated as an array of numbers
+                if (Array.isArray(trend)) {
+                  return (
+                    <Box key={key} sx={{ mb: 1 }}>
+                      <Typography>
+                        {key}: {trend.length > 0 ? trend[trend.length - 1] : 'N/A'}
+                      </Typography>
+                    </Box>
+                  );
+                }
+                
+                // If trend is an object with current, change, and status properties
+                if (typeof trend === 'object' && trend !== null && 'current' in trend && 'change' in trend && 'status' in trend) {
+                  return (
+                    <Box key={key} sx={{ mb: 1 }}>
+                      <Typography>
+                        {key}: {trend.current} ({trend.change > 0 ? '+' : ''}{trend.change}%)
+                      </Typography>
+                      <Typography variant="body2" color={
+                        trend.status === 'improving' ? 'success.main' :
+                        trend.status === 'degrading' ? 'error.main' :
+                        'text.secondary'
+                      }>
+                        Status: {trend.status}
+                      </Typography>
+                    </Box>
+                  );
+                }
+                
+                return null;
+              })}
             </>
           )}
         </Paper>

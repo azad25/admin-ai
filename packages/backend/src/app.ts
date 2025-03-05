@@ -20,16 +20,8 @@ import path from 'path';
 
 export async function createApp(wsService: WebSocketService) {
   // Initialize AppEngine
-  const appEngine = AppEngine.getInstance();
+  const appEngine = await AppEngine.getInstance();
   
-  try {
-    await appEngine.initialize();
-    logger.info('AppEngine initialized successfully');
-  } catch (error) {
-    logger.error('Failed to initialize AppEngine', { error });
-    throw error;
-  }
-
   const app = express();
 
   // Security middleware
@@ -53,6 +45,11 @@ export async function createApp(wsService: WebSocketService) {
   }));
   
   app.use(express.json());
+
+  // Add a simple test endpoint
+  app.get('/test', (req, res) => {
+    res.json({ message: 'Backend server is working!' });
+  });
 
   // Serve static files
   app.use(express.static(path.join(__dirname, '../public')));
@@ -100,19 +97,6 @@ export async function createApp(wsService: WebSocketService) {
 
   // Error handling
   app.use(errorHandler);
-
-  // Handle shutdown
-  process.on('SIGTERM', async () => {
-    logger.info('SIGTERM received. Starting graceful shutdown...');
-    await appEngine.shutdown();
-    process.exit(0);
-  });
-
-  process.on('SIGINT', async () => {
-    logger.info('SIGINT received. Starting graceful shutdown...');
-    await appEngine.shutdown();
-    process.exit(0);
-  });
 
   return app;
 } 

@@ -1,26 +1,31 @@
 {
   "compilerOptions": {
     "target": "ES2020",
-    "module": "commonjs",
+    "module": "CommonJS",
     "lib": ["ES2020"],
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "outDir": "./dist",
-    "rootDir": "./src",
+    "outDir": "dist",
+    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "moduleResolution": "node",
     "resolveJsonModule": true,
-    "composite": true,
+    "composite": false,
+    "isolatedModules": true,
+    "allowJs": false,
     "baseUrl": ".",
     "paths": {
       "@admin-ai/shared": ["./src"],
       "@admin-ai/shared/*": ["./src/*"]
-    }
+    },
+    "preserveSymlinks": true,
+    "noEmit": false,
+    "emitDeclarationOnly": false
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules"]
 } 

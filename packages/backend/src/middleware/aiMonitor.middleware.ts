@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { AIService } from '../services/ai.service';
 import { WebSocketService } from '../services/websocket.service';
 import { logger } from '../utils/logger';
+import { RequestWithUser } from '../types/express';
 
 export class AIMonitorMiddleware {
   private aiService: AIService;
@@ -10,7 +11,7 @@ export class AIMonitorMiddleware {
     this.aiService = new AIService();
   }
 
-  public handle = async (req: Request, res: Response, next: NextFunction) => {
+  public handle = async (req: RequestWithUser, res: Response, next: NextFunction) => {
     const startTime = Date.now();
     const originalSend = res.send;
     const originalJson = res.json;
@@ -36,7 +37,7 @@ export class AIMonitorMiddleware {
             ip: req.ip
           }
         }
-      }, req.user?.id);
+      }, req.user?.id || 'anonymous');
 
       // Override response methods to intercept the response
       res.send = function (body: any): Response {
@@ -58,7 +59,7 @@ export class AIMonitorMiddleware {
               body
             }
           }
-        }, req.user?.id).catch((err: Error) => logger.error('Failed to handle response event:', err));
+        }, req.user?.id || 'anonymous').catch((err: Error) => logger.error('Failed to handle response event:', err));
 
         return originalSend.call(res, body);
       };
@@ -82,7 +83,7 @@ export class AIMonitorMiddleware {
               body
             }
           }
-        }, req.user?.id).catch((err: Error) => logger.error('Failed to handle response event:', err));
+        }, req.user?.id || 'anonymous').catch((err: Error) => logger.error('Failed to handle response event:', err));
 
         return originalJson.call(res, body);
       };
@@ -106,7 +107,7 @@ export class AIMonitorMiddleware {
               status
             }
           }
-        }, req.user?.id).catch((err: Error) => logger.error('Failed to handle response event:', err));
+        }, req.user?.id || 'anonymous').catch((err: Error) => logger.error('Failed to handle response event:', err));
 
         // Handle different overloads
         if (typeof encoding === 'function') {
@@ -124,7 +125,7 @@ export class AIMonitorMiddleware {
     }
   };
 
-  public handleError = async (error: Error, req: Request, res: Response, next: NextFunction) => {
+  public handleError = async (error: Error, req: RequestWithUser, res: Response, next: NextFunction) => {
     try {
       await this.aiService.handleSystemEvent({
         type: 'error',
@@ -140,7 +141,7 @@ export class AIMonitorMiddleware {
             stack: error.stack
           }
         }
-      }, req.user?.id);
+      }, req.user?.id || 'anonymous');
     } catch (err) {
       logger.error('Failed to handle error event:', err);
     }

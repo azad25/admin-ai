@@ -1,497 +1,206 @@
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  Box,
-  Button,
-  Card,
-  CardContent,
-  Container,
-  Grid,
-  TextField,
-  Typography,
-  Switch,
-  FormControlLabel,
-  Alert,
-  CircularProgress,
-  Chip,
-  Tooltip,
-  Paper,
-  Stack,
-  Select,
-  MenuItem,
-  InputLabel,
-  FormControl,
-  CardActions
-} from '@mui/material';
-import {
-  Check as CheckIcon,
-  Error as ErrorIcon,
-  Info as InfoIcon,
-  Key as KeyIcon,
-  Psychology as PsychologyIcon,
-  Settings as SettingsIcon,
-  ModelTraining as ModelIcon
-} from '@mui/icons-material';
-import { ErrorBoundary } from '../components/ErrorBoundary';
-import { useSnackbar } from 'notistack';
-import { aiSettingsService } from '../services/aiSettings';
-import { LLMProvider, AIProviderConfig } from '@admin-ai/shared/src/types/ai';
-import { AIStatusAlert } from '../components/AIStatusAlert';
-import { wsService } from '../services/websocket.service';
+import React, { useEffect, useCallback, useState } from 'react';
+import { Box, Typography, Alert, CircularProgress, Grid } from '@mui/material';
+import { useSnackbar } from '../contexts/SnackbarContext';
+import { RootState } from '../store';
+import { loadProviders, updateProvider } from '../store/slices/aiSlice';
+import { ProviderCard } from '../components/ProviderCard';
 import { useAuth } from '../contexts/AuthContext';
+import { AIProviderConfig, LLMProvider } from '@admin-ai/shared/types/ai';
+import { logger } from '../utils/logger';
+import { useAppDispatch, useAppSelector } from '../hooks/redux';
+import { aiSettingsService } from '../services/aiSettings.service';
 
-interface AIProvider {
-  id: LLMProvider;
-  name: string;
-  description: string;
-  icon: string;
-  defaultModel: string;
-  apiKeyPlaceholder: string;
+interface SaveProviderSettings {
+  apiKey: string;
+  selectedModel: string;
+  isActive: boolean;
+  provider: LLMProvider;
 }
 
-const providers: AIProvider[] = [
-  {
+const defaultProviders: Record<LLMProvider, AIProviderConfig> = {
+  openai: {
     id: 'openai',
+    provider: 'openai',
     name: 'OpenAI',
-    description: 'Access GPT-4 and GPT-3.5 models',
+    description: 'Integrate with OpenAI models like GPT-4 and GPT-3.5',
     icon: '🤖',
     defaultModel: 'gpt-4',
+    selectedModel: 'gpt-4',
     apiKeyPlaceholder: 'sk-...',
+    isActive: false
   },
-  {
+  gemini: {
     id: 'gemini',
+    provider: 'gemini',
     name: 'Google Gemini',
-    description: 'Access Gemini models',
+    description: 'Access Google\'s latest AI models',
     icon: '🧠',
     defaultModel: 'gemini-2.0-flash',
+    selectedModel: 'gemini-2.0-flash',
     apiKeyPlaceholder: 'API Key',
+    isActive: false
   },
-  {
+  anthropic: {
     id: 'anthropic',
+    provider: 'anthropic',
     name: 'Anthropic',
-    description: 'Access Claude models',
+    description: 'Use Claude and other Anthropic models',
     icon: '🌟',
     defaultModel: 'claude-3-opus',
-    apiKeyPlaceholder: 'API Key',
-  },
-];
-
-interface ProviderCardProps {
-  provider: AIProvider;
-  config: AIProviderConfig | null;
-  onSave: (settings: { apiKey: string; selectedModel: string; isActive: boolean }) => Promise<void>;
-  onVerify: () => Promise<void>;
-  onDelete: () => Promise<void>;
-}
-
-const ProviderCard: React.FC<ProviderCardProps> = ({
-  provider,
-  config,
-  onSave,
-  onVerify,
-  onDelete,
-}) => {
-  const [apiKey, setApiKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState(provider.defaultModel);
-  const [isActive, setIsActive] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [isLoadingKey, setIsLoadingKey] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const { enqueueSnackbar } = useSnackbar();
-  const loadingKeyRef = useRef(false);
-
-  // Load initial state from config
-  useEffect(() => {
-    if (config) {
-      setIsActive(config.isActive || false);
-      setSelectedModel(config.selectedModel || provider.defaultModel);
-      if (config.apiKey && !loadingKeyRef.current) {
-        loadApiKey();
-      }
-    }
-  }, [config]);
-
-  const loadApiKey = async () => {
-    if (!config?.apiKey || loadingKeyRef.current) return;
-    
-    try {
-      loadingKeyRef.current = true;
-      setIsLoadingKey(true);
-      setError(null);
-      const key = await aiSettingsService.getDecryptedApiKey(provider.id);
-      setApiKey(key);
-    } catch (error) {
-      enqueueSnackbar('Failed to load API key', { variant: 'error' });
-      setError('Failed to load API key');
-    } finally {
-      setIsLoadingKey(false);
-      loadingKeyRef.current = false;
-    }
-  };
-
-  const handleSave = async () => {
-    if (!apiKey.trim() || isSaving) return;
-
-    try {
-      setIsSaving(true);
-      setError(null);
-      
-      // Always save as active when saving a new API key
-      await onSave({ 
-        apiKey, 
-        selectedModel, 
-        isActive: true 
-      });
-      
-      setIsActive(true);
-      
-      // Verify immediately after saving to create the client
-      await onVerify();
-    } catch (error) {
-      setError('Failed to save settings');
-      enqueueSnackbar('Failed to save settings', { variant: 'error' });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleVerify = async () => {
-    if (isVerifying) return;
-    try {
-      setIsVerifying(true);
-      setError(null);
-      await onVerify();
-    } catch (error) {
-      setError('Failed to verify API key');
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  const handleActiveToggle = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    if (isSaving) return;
-    try {
-      setIsSaving(true);
-      setError(null);
-      
-      const newActiveState = event.target.checked;
-      await onSave({
-        apiKey: apiKey || (config?.apiKey ? await aiSettingsService.getDecryptedApiKey(provider.id) : ''),
-        selectedModel,
-        isActive: newActiveState
-      });
-      
-      setIsActive(newActiveState);
-      
-      if (newActiveState) {
-        // Verify and create client when activating
-        await onVerify();
-      }
-    } catch (error) {
-      setError('Failed to update active state');
-      enqueueSnackbar('Failed to update active state', { variant: 'error' });
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <Card>
-      <CardContent>
-        <Box display="flex" alignItems="center" mb={2}>
-          <Typography variant="h5" component="span" mr={1}>
-            {provider.icon}
-          </Typography>
-          <Typography variant="h5">{provider.name}</Typography>
-          {config?.isVerified && (
-            <Chip
-              icon={<CheckIcon />}
-              label="Verified"
-              color="success"
-              size="small"
-              sx={{ ml: 1 }}
-            />
-          )}
-        </Box>
-        <Typography color="textSecondary" paragraph>
-          {provider.description}
-        </Typography>
-        {error && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            {error}
-          </Alert>
-        )}
-        <TextField
-          fullWidth
-          label="API Key"
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder={provider.apiKeyPlaceholder}
-          margin="normal"
-          disabled={isLoadingKey || isSaving}
-        />
-        <FormControl fullWidth margin="normal">
-          <InputLabel>Model</InputLabel>
-          <Select
-            value={selectedModel}
-            onChange={(e) => setSelectedModel(e.target.value)}
-            label="Model"
-          >
-            {config?.availableModels?.map((model) => (
-              <MenuItem key={model} value={model}>
-                {model}
-              </MenuItem>
-            )) || (
-              <MenuItem value={provider.defaultModel}>
-                {provider.defaultModel}
-              </MenuItem>
-            )}
-          </Select>
-        </FormControl>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={isActive}
-              onChange={handleActiveToggle}
-              disabled={isSaving || (!config?.apiKey && !apiKey)}
-            />
-          }
-          label={
-            <Box display="flex" alignItems="center">
-              Active
-              {(isSaving || isLoadingKey) && (
-                <CircularProgress size={16} sx={{ ml: 1 }} />
-              )}
-            </Box>
-          }
-        />
-      </CardContent>
-      <CardActions>
-        <Button
-          variant="contained"
-          onClick={handleSave}
-          disabled={!apiKey || isSaving}
-          startIcon={isSaving ? <CircularProgress size={20} /> : <KeyIcon />}
-        >
-          {config?.apiKey ? 'Update' : 'Save & Activate'}
-        </Button>
-        <Button
-          variant="outlined"
-          onClick={handleVerify}
-          disabled={!config?.apiKey || isVerifying}
-          startIcon={isVerifying ? <CircularProgress size={20} /> : <PsychologyIcon />}
-        >
-          Verify
-        </Button>
-        {config && (
-          <Button 
-            color="error" 
-            onClick={onDelete}
-            startIcon={<ErrorIcon />}
-          >
-            Delete
-          </Button>
-        )}
-      </CardActions>
-    </Card>
-  );
-};
+    selectedModel: 'claude-3-opus',
+    apiKeyPlaceholder: 'sk-ant-...',
+    isActive: false
+  }
+} as const;
 
 export const AISettings: React.FC = () => {
-  const [providerConfigs, setProviderConfigs] = useState<Record<LLMProvider, AIProviderConfig | null>>({
-    openai: null,
-    gemini: null,
-    anthropic: null,
-  });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const { enqueueSnackbar } = useSnackbar();
-  const loadingRef = useRef(false);
-  const [verifying, setVerifying] = useState<boolean>(false);
-  const auth = useAuth();
-
-  if (!auth) {
-    throw new Error('Auth context is required');
-  }
-  const { user } = auth;
+  const dispatch = useAppDispatch();
+  const { showSuccess, showError } = useSnackbar();
+  const { user } = useAuth();
+  const [allProviders, setAllProviders] = useState<AIProviderConfig[]>([]);
+  
+  const {
+    providers,
+    isLoading,
+    error
+  } = useAppSelector((state: RootState) => state.ai);
 
   useEffect(() => {
-    // Handle WebSocket notifications
-    const handleNotification = (notification: any) => {
-      if (notification.metadata?.source?.page === 'AI Settings') {
-        if (notification.metadata.status === 'success') {
-          enqueueSnackbar(notification.content, { variant: 'success' });
-        } else if (notification.metadata.status === 'error') {
-          enqueueSnackbar(notification.content, { variant: 'error' });
+    if (user) {
+      void dispatch(loadProviders());
+    }
+  }, [dispatch, user]);
+
+  // Merge database providers with default providers
+  useEffect(() => {
+    const mergedProviders: AIProviderConfig[] = Object.values(defaultProviders).map(defaultProvider => {
+      const dbProvider = providers.find(p => p.provider === defaultProvider.provider);
+      
+      if (dbProvider) {
+        // If the provider is Gemini, ensure the model name is correct
+        if (dbProvider.provider === 'gemini') {
+          return {
+            ...dbProvider,
+            defaultModel: 'gemini-2.0-flash',
+            selectedModel: dbProvider.selectedModel || 'gemini-2.0-flash'
+          };
         }
+        return dbProvider;
       }
-    };
-
-    wsService.on('notification', handleNotification);
+      
+      return defaultProvider;
+    });
     
-    if (!loadingRef.current) {
-      loadSettings();
-    }
+    setAllProviders(mergedProviders);
+  }, [providers]);
 
-    return () => {
-      loadingRef.current = false;
-      wsService.off('notification', handleNotification);
-    };
-  }, [enqueueSnackbar]);
-
-  const loadSettings = async () => {
-    if (loadingRef.current) return;
+  const handleSave = useCallback(async (settings: SaveProviderSettings) => {
     try {
-      loadingRef.current = true;
-      console.log('Loading AI settings...');
-      setLoading(true);
-      setError(null);
-      
-      // Initialize default configs
-      const defaultConfigs: Record<LLMProvider, AIProviderConfig | null> = {
-        openai: null,
-        gemini: null,
-        anthropic: null,
-      };
-
-      // Fetch settings from the server
-      const settings = await aiSettingsService.getAllProviderSettings();
-      console.log('Received settings:', settings);
-
-      // Update configs with received settings
-      if (Array.isArray(settings)) {
-        settings.forEach((setting) => {
-          if (setting && setting.provider) {
-            defaultConfigs[setting.provider] = setting;
-          }
-        });
+      // If the provider is Gemini, ensure we're using the correct model name
+      if (settings.provider === 'gemini') {
+        settings.selectedModel = 'gemini-2.0-flash';
       }
-
-      setProviderConfigs(defaultConfigs);
-    } catch (error: any) {
-      console.error('Failed to load AI settings:', error);
-      setError(error?.message || 'Failed to load AI settings. Please try again later.');
-      enqueueSnackbar(error?.message || 'Failed to load AI settings', { variant: 'error' });
-    } finally {
-      setLoading(false);
-      loadingRef.current = false;
-    }
-  };
-
-  const handleSave = async (provider: LLMProvider, settings: {
-    apiKey: string;
-    selectedModel: string;
-    isActive: boolean;
-  }) => {
-    try {
-      const config = await aiSettingsService.saveProviderSettings(provider, settings);
-      setProviderConfigs((prev) => ({
-        ...prev,
-        [provider]: config,
-      }));
-      enqueueSnackbar('Settings saved successfully', { variant: 'success' });
-    } catch (error) {
-      enqueueSnackbar('Failed to save settings', { variant: 'error' });
-      throw error;
-    }
-  };
-
-  const handleVerify = async (provider: LLMProvider) => {
-    try {
-      setVerifying(true);
-      const result = await aiSettingsService.verifyProvider(provider);
       
-      if (result.isVerified && user) {
-        // Send a greeting message through the WebSocket
-        wsService.send('ai_message', {
-          content: 'Hello! I am your AI assistant. How can I help you today?',
-          userId: user.id
-        });
-
-        // Show success notification
-        enqueueSnackbar(`${provider} verified successfully`, { variant: 'success' });
-        
-        // Trigger AI assistant panel animation
-        const event = new CustomEvent('show-ai-assistant', {
-          detail: { animate: true }
-        });
-        window.dispatchEvent(event);
-      }
-
-      await loadSettings();
-    } catch (error) {
-      console.error('Failed to verify provider:', error);
-      enqueueSnackbar(
-        error instanceof Error ? error.message : 'Failed to verify provider',
-        { variant: 'error' }
-      );
-    } finally {
-      setVerifying(false);
+      await dispatch(updateProvider({ provider: settings.provider, settings })).unwrap();
+      showSuccess('Provider settings saved successfully');
+    } catch (err) {
+      const error = err as Error;
+      logger.error('Failed to save provider settings:', error);
+      showError('Failed to save provider settings');
     }
-  };
+  }, [dispatch, showSuccess, showError]);
 
-  const handleDelete = async (provider: LLMProvider) => {
+  const handleVerify = useCallback(async (provider: LLMProvider) => {
     try {
-      await aiSettingsService.deleteProviderSettings(provider);
-      setProviderConfigs((prev) => ({
-        ...prev,
-        [provider]: null,
-      }));
-      enqueueSnackbar('Settings deleted successfully', { variant: 'success' });
-    } catch (error) {
-      enqueueSnackbar('Failed to delete settings', { variant: 'error' });
+      await aiSettingsService.verifyProvider(provider);
+      showSuccess('Provider verified successfully');
+    } catch (err) {
+      const error = err as Error;
+      logger.error('Failed to verify provider:', error);
+      showError('Failed to verify provider');
     }
-  };
+  }, [showSuccess, showError]);
+
+  const handleDelete = useCallback(async (provider: LLMProvider) => {
+    try {
+      await aiSettingsService.deleteProvider(provider);
+      await dispatch(loadProviders());
+      showSuccess('Provider deleted successfully');
+    } catch (err) {
+      const error = err as Error;
+      logger.error('Failed to delete provider:', error);
+      showError('Failed to delete provider');
+    }
+  }, [dispatch, showSuccess, showError]);
+
+  if (!user) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="warning">
+          Please log in to access AI settings
+        </Alert>
+      </Box>
+    );
+  }
+
+  if (isLoading && allProviders.length === 0) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
 
   if (error) {
     return (
-      <Container sx={{ mt: 4 }}>
-        <Alert severity="error" sx={{ mb: 2 }}>
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error">
           {error}
         </Alert>
-        <Button variant="contained" onClick={loadSettings}>
-          Retry
-        </Button>
-      </Container>
-    );
-  }
-
-  if (loading) {
-    return (
-      <Container sx={{ mt: 4 }}>
-        <Box display="flex" justifyContent="center" alignItems="center" flexDirection="column" gap={2}>
-          <CircularProgress />
-          <Typography>Loading AI settings...</Typography>
-        </Box>
-      </Container>
+      </Box>
     );
   }
 
   return (
-    <Container sx={{ py: 8 }}>
-      <Stack spacing={6}>
-        <Box mb={4}>
-          <Typography variant="h4" gutterBottom>AI Provider Settings</Typography>
-          <AIStatusAlert />
-        </Box>
-        
-        <Grid container spacing={3}>
-          {providers.map((provider) => (
-            <Grid item xs={12} md={6} lg={4} key={provider.id}>
-              <ProviderCard
-                provider={provider}
-                config={providerConfigs[provider.id]}
-                onSave={(settings) => handleSave(provider.id, settings)}
-                onVerify={() => handleVerify(provider.id)}
-                onDelete={() => handleDelete(provider.id)}
-              />
-            </Grid>
-          ))}
-        </Grid>
-      </Stack>
-    </Container>
+    <Box sx={{ p: 3 }}>
+      <Typography variant="h4" gutterBottom>
+        AI Provider Settings
+      </Typography>
+      <Typography variant="body1" sx={{ mb: 3 }}>
+        Configure your AI providers to enable AI features in the dashboard. You need at least one active provider.
+      </Typography>
+      
+      <Grid container spacing={3}>
+        {allProviders.map((config: AIProviderConfig) => (
+          <Grid item xs={12} md={4} key={config.provider}>
+            <ProviderCard
+              provider={{
+                id: config.provider,
+                name: config.provider === 'openai' ? 'OpenAI' : 
+                      config.provider === 'gemini' ? 'Google Gemini' : 
+                      config.provider === 'anthropic' ? 'Anthropic' : config.provider,
+                description: config.provider === 'openai' ? 'Integrate with OpenAI models like GPT-4 and GPT-3.5' :
+                            config.provider === 'gemini' ? 'Access Google\'s latest AI models' :
+                            config.provider === 'anthropic' ? 'Use Claude and other Anthropic models' : '',
+                icon: config.provider === 'openai' ? '🤖' :
+                      config.provider === 'gemini' ? '🧠' :
+                      config.provider === 'anthropic' ? '🌟' : '🔌',
+                defaultModel: config.provider === 'openai' ? 'gpt-4' :
+                             config.provider === 'gemini' ? 'gemini-2.0-flash' :
+                             config.provider === 'anthropic' ? 'claude-3-opus' : '',
+                apiKeyPlaceholder: config.provider === 'openai' ? 'sk-...' :
+                                  config.provider === 'gemini' ? 'API Key' :
+                                  config.provider === 'anthropic' ? 'sk-ant-...' : 'API Key',
+                provider: config.provider
+              }}
+              config={config}
+              onSave={(settings) => handleSave({ ...settings, provider: config.provider })}
+              onVerify={() => handleVerify(config.provider)}
+              onDelete={() => handleDelete(config.provider)}
+            />
+          </Grid>
+        ))}
+      </Grid>
+    </Box>
   );
 };
-
-export default AISettings; 

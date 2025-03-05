@@ -16,12 +16,32 @@ export function encrypt(text: string): string {
   return `${iv.toString('hex')}:${encrypted.toString('hex')}`;
 }
 
-export function decrypt(text: string): string {
+export function decrypt(text: string | undefined): string {
+  // Check if text is undefined or empty
+  if (!text) {
+    throw new Error('Cannot decrypt undefined or empty string');
+  }
+  
+  // Check if text has the correct format
+  if (!text.includes(':')) {
+    throw new Error('Invalid encrypted text format: missing delimiter');
+  }
+  
   const [ivHex, encryptedHex] = text.split(':');
-  const iv = Buffer.from(ivHex, 'hex');
-  const encryptedText = Buffer.from(encryptedHex, 'hex');
-  const decipher = crypto.createDecipheriv(ALGORITHM, KEY_BUFFER, iv);
-  let decrypted = decipher.update(encryptedText);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-  return decrypted.toString();
-} 
+  
+  // Validate both parts exist
+  if (!ivHex || !encryptedHex) {
+    throw new Error('Invalid encrypted text format: missing iv or encrypted data');
+  }
+  
+  try {
+    const iv = Buffer.from(ivHex, 'hex');
+    const encryptedText = Buffer.from(encryptedHex, 'hex');
+    const decipher = crypto.createDecipheriv(ALGORITHM, KEY_BUFFER, iv);
+    let decrypted = decipher.update(encryptedText);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    return decrypted.toString();
+  } catch (error) {
+    throw new Error(`Decryption failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}

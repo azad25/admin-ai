@@ -1,5 +1,5 @@
 import { User } from '@admin-ai/shared';
-import api from './api';
+import { api } from './api';
 import { logger } from '../utils/logger';
 
 export interface LoginCredentials {
@@ -172,5 +172,9 @@ export const authService = {
 
   getToken(): string | null {
     return localStorage.getItem('auth_token');
+  },
+  
+  isAuthenticated(): boolean {
+    return !!this.getToken();
   }
-}; 
+};

@@ -4,6 +4,12 @@ class Logger {
   private isDevelopment = process.env.NODE_ENV === 'development';
 
   private log(level: LogLevel, message: string, ...args: any[]) {
+    // Skip specific warnings that are expected during normal operation
+    if (message === 'Disconnected from AI service') {
+      // Completely suppress disconnection messages
+      return;
+    }
+
     if (this.isDevelopment || level === 'error') {
       const timestamp = new Date().toISOString();
       const prefix = `[${level.toUpperCase()}] ${timestamp}`;

@@ -2,7 +2,7 @@ import { Job, Worker } from 'bullmq';
 import { logger } from '../utils/logger';
 import { queueService } from '../services/queue.service';
 import { kafkaService } from '../services/kafka.service';
-import { cacheService } from '../services/cache.service';
+import { CacheService } from '../services/cache.service';
 import { AIService } from '../services/ai.service';
 import { WebSocketService } from '../services/websocket.service';
 import { AIMessage } from '@admin-ai/shared/src/types/ai';
@@ -16,6 +16,7 @@ interface AITaskData {
   dataset?: unknown[];
 }
 
+const cacheService = CacheService.getInstance();
 const aiService = new AIService();
 
 export const aiWorker = new Worker<AITaskData>('ai-tasks', async (job: Job<AITaskData, any, string>) => {
@@ -24,7 +25,7 @@ export const aiWorker = new Worker<AITaskData>('ai-tasks', async (job: Job<AITas
 
     // Send start message to Kafka
     const timestamp = new Date().toISOString();
-    await kafkaService.sendMessage('ai-events', {
+    await kafkaService.publish('ai-events', {
       type: 'task_started',
       jobId: job.id,
       data: {
@@ -66,7 +67,7 @@ export const aiWorker = new Worker<AITaskData>('ai-tasks', async (job: Job<AITas
 
     // Send completion message to Kafka
     const completionTimestamp = new Date().toISOString();
-    await kafkaService.sendMessage('ai-events', {
+    await kafkaService.publish('ai-events', {
       type: 'task_completed',
       jobId: job.id,
       data: {
@@ -89,7 +90,7 @@ export const aiWorker = new Worker<AITaskData>('ai-tasks', async (job: Job<AITas
 
     // Send error message to Kafka
     const errorTimestamp = new Date().toISOString();
-    await kafkaService.sendMessage('ai-events', {
+    await kafkaService.publish('ai-events', {
       type: 'task_failed',
       jobId: job.id,
       data: {
@@ -119,4 +120,93 @@ export async function startAIWorker() {
     logger.error('Failed to start AI worker:', error);
     throw error;
   }
-} 
+}
+
+export const aiWorkerHandler = {
+  async initialize() {
+    try {
+      await kafkaService.connect();
+      await kafkaService.subscribe('ai-tasks', 'ai-worker', this.handleAITask.bind(this));
+      logger.info('AI worker initialized');
+    } catch (error) {
+      logger.error('Failed to initialize AI worker:', error);
+      throw error;
+    }
+  },
+
+  async handleAITask(message: any) {
+    const { type, userId, data } = message;
+
+    try {
+      switch (type) {
+        case 'analyze_request':
+          await this.analyzeRequest(data, userId);
+          break;
+        case 'analyze_error':
+          await this.analyzeError(data, userId);
+          break;
+        case 'analyze_metrics':
+          await this.analyzeMetrics(data, userId);
+          break;
+        default:
+          logger.warn(`Unknown AI task type: ${type}`);
+      }
+    } catch (error) {
+      logger.error(`Error processing AI task ${type}:`, error);
+      if (error instanceof Error) {
+        await kafkaService.publish('ai-events', {
+          type: 'task_failed',
+          userId,
+          data: {
+            taskName: type,
+            error: error.message
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+  },
+
+  async analyzeRequest(data: any, userId: string) {
+    const analysis = await aiService.analyzeData([data]);
+    await kafkaService.publish('ai-events', {
+      type: 'request_analyzed',
+      userId,
+      data: analysis,
+      timestamp: new Date().toISOString()
+    });
+  },
+
+  async analyzeError(data: any, userId: string) {
+    const analysis = await aiService.analyzeData([data]);
+    await kafkaService.publish('ai-events', {
+      type: 'error_analyzed',
+      userId,
+      data: analysis,
+      timestamp: new Date().toISOString()
+    });
+  },
+
+  async analyzeMetrics(data: any, userId: string) {
+    const analysis = await aiService.analyzeMetrics(data);
+    await kafkaService.publish('ai-events', {
+      type: 'metrics_analyzed',
+      userId,
+      data: analysis,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+// Handle worker shutdown
+process.on('SIGTERM', async () => {
+  logger.info('AI worker shutting down');
+  await kafkaService.disconnect();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  logger.info('AI worker shutting down');
+  await kafkaService.disconnect();
+  process.exit(0);
+}); 

@@ -1,10 +1,11 @@
 import React from 'react';
-import { Routes, Route } from 'react-router-dom';
-import Dashboard from '../pages/Dashboard';
-import AISettings from '../pages/AISettings';
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { Dashboard } from '../pages/Dashboard';
+import { AISettings } from '../pages/AISettings';
+import SystemStatus from '../pages/SystemStatus';
+import { Layout } from '../components/Layout';
+import { ProtectedRoute } from '../components/ProtectedRoute';
 import AIMonitoringDashboard from '../components/AIMonitoringDashboard';
-import Layout from '../components/Layout';
-import ProtectedRoute from '../components/ProtectedRoute';
 
 const AppRoutes: React.FC = () => {
   return (

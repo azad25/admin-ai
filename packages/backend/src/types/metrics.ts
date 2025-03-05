@@ -1,3 +1,7 @@
+import { ErrorLog as SharedErrorLog } from '@admin-ai/shared/src/types/error';
+import { SystemHealth as SharedSystemHealth, SystemMetrics as SharedSystemMetrics } from '@admin-ai/shared/src/types/metrics';
+import { AIAnalysis as SharedAIAnalysis } from '@admin-ai/shared/src/types/ai';
+
 export interface RequestMetric {
   path: string;
   method: string;
@@ -18,23 +22,6 @@ export interface RequestLocation {
   uniqueIps: number;
 }
 
-export interface SystemHealth {
-  status: 'healthy' | 'degraded' | 'critical';
-  timestamp: string;
-  services: {
-    [key: string]: {
-      status: 'up' | 'down' | 'degraded';
-      lastCheck: string;
-      message?: string;
-    };
-  };
-  resources: {
-    cpu: number;
-    memory: number;
-    disk: number;
-  };
-}
-
 export interface AIMessageMetadata {
   status: 'success' | 'warning' | 'error';
   category: string;
@@ -47,90 +34,19 @@ export interface AIMessageMetadata {
   timestamp: string;
 }
 
-export interface ErrorLog {
-  id: string;
-  message: string;
-  stack?: string;
-  timestamp: string;
-  severity: 'low' | 'medium' | 'high';
-  context: {
-    path?: string;
-    method?: string;
-    userId?: string;
-    [key: string]: any;
-  };
-  status: 'new' | 'investigating' | 'resolved';
-  resolution?: {
-    analysis: string;
-    solution?: string;
-    resolvedAt?: string;
-    resolvedBy?: string;
-  };
+export interface ErrorLog extends SharedErrorLog {
+  // Additional backend-specific fields can be added here
 }
 
-export interface AIAnalysis {
-  type: 'error' | 'metrics' | 'health';
-  timestamp: string;
-  insights: Array<{
-    type: 'warning' | 'critical' | 'info';
-    message: string;
-    recommendation?: string;
-    autoFix?: {
-      command: string;
-      description: string;
-      risk: 'low' | 'medium' | 'high';
-    };
-  }>;
-  trends?: {
-    [key: string]: {
-      current: number;
-      previous: number;
-      change: number;
-      status: 'improving' | 'stable' | 'degrading';
-    };
-  };
+export interface SystemHealth extends SharedSystemHealth {
+  // Additional backend-specific fields can be added here
+  status: 'healthy' | 'degraded' | 'critical';
 }
 
-export interface SystemMetrics {
-  requests: {
-    total: number;
-    success: number;
-    failed: number;
-    avgResponseTime: number;
-  };
-  resources: {
-    cpu: {
-      usage: number;
-      load: number[];
-    };
-    memory: {
-      used: number;
-      total: number;
-      free: number;
-    };
-    disk: {
-      used: number;
-      total: number;
-      free: number;
-    };
-  };
-  services: {
-    [key: string]: {
-      status: 'up' | 'down';
-      uptime: number;
-      lastRestart?: string;
-    };
-  };
-  ai: {
-    totalRequests: number;
-    avgResponseTime: number;
-    errorRate: number;
-    modelUsage: {
-      [key: string]: {
-        requests: number;
-        tokens: number;
-        cost: number;
-      };
-    };
-  };
+export interface SystemMetrics extends SharedSystemMetrics {
+  // Additional backend-specific fields can be added here
+}
+
+export interface AIAnalysis extends SharedAIAnalysis {
+  // Additional backend-specific fields can be added here
 } 

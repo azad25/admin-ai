@@ -1,6 +1,7 @@
 import { WebSocketService } from './websocket.service';
 import { logger } from '../utils/logger';
 import { AIMessage } from '@admin-ai/shared/src/types/ai';
+import { v4 as uuidv4 } from 'uuid';
 
 export class AIAssistantService {
   private wsService: WebSocketService;
@@ -12,9 +13,10 @@ export class AIAssistantService {
   public async sendMessage(userId: string, message: string, metadata?: Record<string, any>) {
     try {
       const fullMessage: AIMessage = {
-        id: crypto.randomUUID(),
+        id: `${uuidv4()}`,
         content: message,
         role: 'assistant',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'info',
@@ -25,12 +27,12 @@ export class AIAssistantService {
             action: 'sendMessage',
             details: metadata
           },
-          timestamp: Date.now().toString(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       };
 
-      this.wsService.sendToUser(userId, fullMessage);
+      this.wsService.sendToUser(userId, 'ai:message', fullMessage);
       logger.info('AI message sent to user:', { userId, message });
     } catch (error) {
       logger.error('Failed to send AI message:', error);
@@ -41,9 +43,10 @@ export class AIAssistantService {
   public async broadcast(message: string, metadata?: Record<string, any>) {
     try {
       const fullMessage: AIMessage = {
-        id: crypto.randomUUID(),
+        id: `${uuidv4()}`,
         content: message,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'info',
@@ -54,12 +57,12 @@ export class AIAssistantService {
             action: 'broadcast',
             details: metadata
           },
-          timestamp: Date.now().toString(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       };
 
-      this.wsService.broadcast('ai_message', fullMessage);
+      this.wsService.broadcast('ai:message', fullMessage);
       logger.info('AI message broadcasted:', { message });
     } catch (error) {
       logger.error('Failed to broadcast AI message:', error);

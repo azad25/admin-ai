@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
-import { AppError } from '../utils/error';
+import { AppError } from '../middleware/errorHandler';
 
 interface ValidationConfig {
   body?: z.ZodSchema;
@@ -23,7 +23,8 @@ export const validateRequest = (config: ValidationConfig) => {
       next();
     } catch (error) {
       if (error instanceof z.ZodError) {
-        next(new AppError(400, 'Validation failed', error.errors));
+        const errorMessage = `Validation failed: ${JSON.stringify(error.errors)}`;
+        next(new AppError(400, errorMessage));
       } else {
         next(error);
       }

@@ -18,6 +18,8 @@ import { FixAISettingsTypes1709123456794 } from './migrations/1709123456794-FixA
 import { AddErrorLogs1709123456796 } from './migrations/1709123456796-AddErrorLogs';
 import { AddSecurityEvents1709123456797 } from './migrations/1709123456797-AddSecurityEvents';
 import { AddSampleData1709123456798 } from './migrations/1709123456798-AddSampleData';
+import { AddMetadataToSystemMetrics1740686972345 } from './migrations/1740686972345-AddMetadataToSystemMetrics';
+import { AddTypeAndValueToSystemMetrics1740686972346 } from './migrations/1740686972346-AddTypeAndValueToSystemMetrics';
 
 // Log database configuration before initializing
 logger.info('Database configuration:', {
@@ -46,7 +48,9 @@ export const AppDataSource = new DataSource({
     FixAISettingsTypes1709123456794,
     AddErrorLogs1709123456796,
     AddSecurityEvents1709123456797,
-    AddSampleData1709123456798
+    AddSampleData1709123456798,
+    AddMetadataToSystemMetrics1740686972345,
+    AddTypeAndValueToSystemMetrics1740686972346
   ],
   subscribers: [],
 });

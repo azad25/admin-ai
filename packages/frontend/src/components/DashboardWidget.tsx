@@ -13,6 +13,7 @@ import {
   TableHead,
   TableRow,
   Paper,
+  Skeleton,
 } from '@mui/material';
 import {
   MoreVert as MoreVertIcon,
@@ -20,6 +21,7 @@ import {
 } from '@mui/icons-material';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
+import { api } from '../services/api';
 
 interface DashboardWidgetProps {
   crudPage: {
@@ -39,7 +41,7 @@ export default function DashboardWidget({ crudPage }: DashboardWidgetProps) {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['crudData', crudPage.id],
     queryFn: async () => {
-      const response = await axios.get(`${import.meta.env.VITE_API_URL}/api${crudPage.endpoint}`);
+      const response = await api.get(crudPage.endpoint);
       return response.data;
     },
   });

@@ -1,376 +1,542 @@
-import { Server, Socket } from 'socket.io';
-import { ExtendedError } from 'socket.io/dist/namespace';
+import { Server as HTTPServer } from 'http';
+import { Server as WebSocketServer } from 'socket.io';
+import { WebSocketEvents } from '@admin-ai/shared/src/types/websocket';
 import { logger } from '../utils/logger';
 import { verifyToken } from '../utils/auth';
-import { AIMessage, AIMessageMetadata } from '@admin-ai/shared/src/types/ai';
+import { AIMessage, AIMessageMetadata, AIAnalysis } from '@admin-ai/shared/src/types/ai';
 import { MonitoringService } from './monitoring.service';
-import { ErrorLog, SystemHealth, SystemMetrics } from '../types/metrics';
+import { SystemHealth, SystemMetrics } from '@admin-ai/shared/src/types/metrics';
+import { ErrorLog } from '@admin-ai/shared/src/types/error';
 import { AIService } from './ai.service';
-import { EventEmitter } from 'events';
 import { AppError } from '../middleware/errorHandler';
+import { LLMProvider } from '@admin-ai/shared/src/types/ai';
+import { LogEntry } from '@admin-ai/shared/src/types/logs';
+import { randomUUID } from 'crypto';
 
 interface TokenRefreshError extends AppError {
-  refreshToken?: string;
+  code: 'TOKEN_REFRESH_REQUIRED';
 }
 
-type SocketMiddleware = (socket: Socket, next: (err?: Error) => void) => void;
+type EventName = keyof WebSocketEvents;
+type EventData<T extends EventName> = WebSocketEvents[T];
 
-interface WebSocketEvents {
-  connected: void;
-  disconnected: void;
-}
+export class WebSocketService {
+  private static instance: WebSocketService | null = null;
+  private static isInitializing = false;
+  private static initializationPromise: Promise<WebSocketService> | null = null;
 
-export class WebSocketService extends EventEmitter {
-  private static instance: WebSocketService;
-  private io: Server | null = null;
-  private userSockets: Map<string, Set<string>> = new Map();
+  private io: WebSocketServer | null = null;
+  private userSockets: Map<string, string[]> = new Map();
+  private initialized = false;
   private monitoring: MonitoringService | null = null;
-  private aiService: AIService | null = null;
-  private isConnected: boolean = false;
   private connectionCheckInterval: NodeJS.Timeout | null = null;
-  private server: any;
+  private messageQueue: Map<string, Array<{event: string, data: any}>> = new Map();
+  private recentlyProcessedMessages: Set<string> = new Set();
+  private readonly MAX_RECENT_MESSAGES = 100;
 
-  private constructor() {
-    super();
-    this.setupConnectionCheck();
-  }
+  private constructor() {}
 
-  private setupConnectionCheck(): void {
-    if (this.connectionCheckInterval) {
-      clearInterval(this.connectionCheckInterval);
-    }
-
-    this.connectionCheckInterval = setInterval(() => {
-      this.checkConnection();
-    }, 5000);
-  }
-
-  private async checkConnection(): Promise<void> {
-    try {
-      if (this.io && !this.isConnected) {
-        this.isConnected = true;
-        logger.info('WebSocket service is connected');
-        try {
-          super.emit('connected');
-        } catch (error) {
-          logger.error('Failed to emit connected event:', error);
-        }
-      }
-    } catch (error) {
-      if (this.isConnected) {
-        this.isConnected = false;
-        logger.error('WebSocket service connection lost:', error);
-        try {
-          super.emit('disconnected');
-        } catch (error) {
-          logger.error('Failed to emit disconnected event:', error);
-        }
-        this.attemptReconnect();
-      }
-    }
-  }
-
-  private attemptReconnect(): void {
-    if (!this.io) return;
-
-    try {
-      this.io.close();
-      this.io = null;
-      setTimeout(() => {
-        logger.info('Attempting to reconnect WebSocket service...');
-        this.initialize(this.server);
-      }, 5000);
-    } catch (error) {
-      logger.error('Failed to reconnect WebSocket service:', error);
-    }
-  }
-
-  public static getInstance(): WebSocketService {
+  public static async getInstance(): Promise<WebSocketService> {
     if (!WebSocketService.instance) {
-      WebSocketService.instance = new WebSocketService();
-      logger.info('WebSocket service instance created');
+      if (!WebSocketService.isInitializing) {
+        WebSocketService.isInitializing = true;
+        WebSocketService.initializationPromise = (async () => {
+          try {
+            WebSocketService.instance = new WebSocketService();
+            return WebSocketService.instance;
+          } finally {
+            WebSocketService.isInitializing = false;
+          }
+        })();
+      }
+      await WebSocketService.initializationPromise;
     }
-    return WebSocketService.instance;
-  }
-
-  public getConnectionStatus(): boolean {
-    return this.isConnected;
+    return WebSocketService.instance!;
   }
 
   public isInitialized(): boolean {
-    return this.io !== null;
+    return this.initialized;
   }
 
-  public setMonitoringService(monitoring: MonitoringService): void {
-    this.monitoring = monitoring;
-    this.setupMonitoringEvents();
-  }
-
-  public setAIService(aiService: AIService): void {
-    this.aiService = aiService;
-    logger.info('AI service set in WebSocket service');
-  }
-
-  public initialize(server: any): void {
-    if (this.io) {
-      logger.warn('WebSocket service is already initialized');
+  public async initialize(httpServer: HTTPServer): Promise<void> {
+    if (this.initialized) {
       return;
     }
 
     try {
-      this.server = server;
-      this.io = new Server(server, {
-        path: '/socket.io',
+      this.io = new WebSocketServer(httpServer, {
         cors: {
-          origin: process.env.NODE_ENV === 'production' 
-            ? process.env.FRONTEND_URL 
-            : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'],
-          methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-          credentials: true,
-          allowedHeaders: ['Content-Type', 'Authorization'],
+          origin: '*',
+          methods: ['GET', 'POST']
         },
-        allowEIO3: true,
-        transports: ['websocket', 'polling'],
-        pingTimeout: 10000,
-        pingInterval: 5000
+        path: '/socket.io',  // Use Socket.IO default path
+        serveClient: true,  // Serve Socket.IO client files
+        transports: ['websocket', 'polling'],  // Enable both WebSocket and polling transports
+        allowEIO3: true,  // Allow Engine.IO v3 client compatibility
+        connectTimeout: 45000  // Increase connection timeout
       });
 
-      // Add authentication middleware
-      this.io.use(async (socket, next) => {
-        try {
-          const token = socket.handshake.auth.token;
-          if (!token) {
-            logger.warn('No token provided for socket connection');
-            return next(new Error('Authentication required'));
+      this.io.on('connection', (socket) => {
+        logger.info(`Client connected: ${socket.id}`);
+
+        socket.on('register', (userId: string) => {
+          if (!this.userSockets.has(userId)) {
+            this.userSockets.set(userId, []);
           }
+          
+          // Check if socket ID is already registered for this user
+          if (!this.userSockets.get(userId)!.includes(socket.id)) {
+            this.userSockets.get(userId)!.push(socket.id);
+          }
+          
+          logger.info(`User ${userId} registered with socket ${socket.id}`);
+          
+          // Debug log to check user sockets map
+          logger.debug(`Current user sockets map: ${JSON.stringify(Array.from(this.userSockets.entries()))}`);
+          
+          // Emit a confirmation back to the client
+          socket.emit('register:confirmed', { userId, socketId: socket.id });
+          
+          // Send any queued messages for this user
+          this.sendQueuedMessages(userId);
+        });
 
-          const decoded = await verifyToken(token);
-          socket.data.userId = decoded.userId;
-          next();
-        } catch (error) {
-          logger.error('Socket authentication failed:', error);
-          next(new Error('Authentication failed'));
-        }
+        // Add a ping handler to keep connections alive
+        socket.on('ping', (data: { timestamp: string }) => {
+          // Log the ping for debugging
+          logger.debug(`Received ping from socket ${socket.id}, timestamp: ${data.timestamp}`);
+          
+          // Respond with a pong to keep the connection alive
+          const responseTimestamp = new Date().toISOString();
+          socket.emit('pong', { 
+            timestamp: responseTimestamp,
+            received: data.timestamp 
+          });
+          
+          logger.debug(`Sent pong to socket ${socket.id}, timestamp: ${responseTimestamp}`);
+        });
+
+        // Add a handler for test messages
+        socket.on('test', (data: any) => {
+          logger.info(`Received test message from socket ${socket.id}:`, data);
+          
+          // Echo the message back to the client
+          socket.emit('test:response', {
+            message: `Echo: ${data.message || 'No message provided'}`,
+            timestamp: new Date().toISOString(),
+            socketId: socket.id
+          });
+        });
+
+        // Add a handler for 'message' events (used by the frontend)
+        socket.on('message', async (data: any) => {
+          try {
+            // Ensure data has a content property that's a string
+            if (!data || typeof data.content !== 'string') {
+              logger.warn(`Received invalid message format from socket ${socket.id}`);
+              return;
+            }
+            
+            // Check if this is an AI response message (to prevent feedback loops)
+            if (data.content.includes("I received your message:")) {
+              logger.debug(`Skipping processing of AI response message to prevent feedback loop`);
+              return;
+            }
+            
+            // Check for duplicate messages using message ID
+            if (data.id && this.recentlyProcessedMessages.has(data.id)) {
+              logger.debug(`Skipping duplicate message with ID: ${data.id}`);
+              return;
+            }
+            
+            // Add message ID to processed set if it exists
+            if (data.id) {
+              this.recentlyProcessedMessages.add(data.id);
+              
+              // Trim the set if it gets too large
+              if (this.recentlyProcessedMessages.size > this.MAX_RECENT_MESSAGES) {
+                const iterator = this.recentlyProcessedMessages.values();
+                this.recentlyProcessedMessages.delete(iterator.next().value);
+              }
+            }
+            
+            logger.info(`Received message from socket ${socket.id}:`, data);
+            
+            // Find the user ID associated with this socket
+            let userId: string | undefined;
+            for (const [id, sockets] of this.userSockets.entries()) {
+              if (sockets.includes(socket.id)) {
+                userId = id;
+                break;
+              }
+            }
+            
+            if (!userId) {
+              logger.warn(`Cannot process message: No user ID found for socket ${socket.id}`);
+              return;
+            }
+            
+            logger.info(`Processing message for user ${userId}: ${data.content || ''}`, { timestamp: new Date().toISOString() });
+            
+            // Create a user message to echo back what was sent
+            const userMessage: AIMessage = {
+              id: data.id || randomUUID(),
+              content: data.content || '',
+              role: 'user',
+              timestamp: new Date().toISOString(),
+              metadata: {
+                type: 'chat',
+                read: true,
+                timestamp: new Date().toISOString()
+              }
+            };
+            
+            // Send the user message back to confirm it was received
+            await this.sendToUser(userId, 'ai:message', userMessage);
+            // Also emit as 'message' for compatibility
+            await this.sendToUser(userId, 'message' as any, userMessage);
+            logger.info(`Sent user message confirmation to user ${userId}`);
+            
+            // Create a response message
+            const responseMessage: AIMessage = {
+              id: randomUUID(),
+              content: `I received your message: "${data.content}". This is a response from the AI service.`,
+              role: 'assistant',
+              timestamp: new Date().toISOString(),
+              metadata: {
+                type: 'chat',
+                read: false,
+                provider: 'gemini',
+                model: 'gemini-2.0-flash',
+                timestamp: new Date().toISOString()
+              }
+            };
+            
+            // Add a small delay to simulate processing
+            setTimeout(async () => {
+              try {
+                await this.sendToUser(userId!, 'ai:message', responseMessage);
+                // Also emit as 'message' for compatibility
+                await this.sendToUser(userId!, 'message' as any, responseMessage);
+                logger.info(`Sent AI response to user ${userId}`);
+              } catch (error) {
+                logger.error(`Error sending AI response to user ${userId}:`, error);
+              }
+            }, 1000);
+            
+          } catch (error) {
+            logger.error('Error processing message:', error);
+          }
+        });
+
+        socket.on('ai:chat', async (data: { message: string }) => {
+          try {
+            logger.info(`Received AI chat message: ${data.message}`);
+            
+            // Find the user ID associated with this socket
+            let userId: string | undefined;
+            for (const [id, sockets] of this.userSockets.entries()) {
+              if (sockets.includes(socket.id)) {
+                userId = id;
+                break;
+              }
+            }
+            
+            if (!userId) {
+              logger.warn(`Cannot process AI chat: No user ID found for socket ${socket.id}`);
+              return;
+            }
+            
+            logger.info(`Processing AI chat for user ${userId}: ${data.message}`);
+            
+            // Create a user message to echo back what was sent
+            const userMessage: AIMessage = {
+              id: randomUUID(),
+              content: data.message,
+              role: 'user',
+              timestamp: new Date().toISOString(),
+              metadata: {
+                type: 'chat',
+                read: true,
+                timestamp: new Date().toISOString()
+              }
+            };
+            
+            // Send the user message back to confirm it was received
+            await this.sendToUser(userId, 'ai:message', userMessage);
+            logger.info(`Sent user message confirmation to user ${userId}`);
+            
+            // Create a response message
+            const responseMessage: AIMessage = {
+              id: randomUUID(),
+              content: `I received your message: "${data.message}". This is a placeholder response since the AI service integration is not fully implemented yet.`,
+              role: 'assistant',
+              timestamp: new Date().toISOString(),
+              metadata: {
+                type: 'chat',
+                read: false,
+                provider: 'gemini',
+                model: 'gemini-2.0-flash',
+                timestamp: new Date().toISOString()
+              }
+            };
+            
+            // Add a small delay to simulate processing
+            setTimeout(async () => {
+              try {
+                await this.sendToUser(userId!, 'ai:message', responseMessage);
+                logger.info(`Sent AI response to user ${userId}`);
+              } catch (error) {
+                logger.error(`Error sending AI response to user ${userId}:`, error);
+              }
+            }, 1000);
+            
+          } catch (error) {
+            logger.error('Error processing AI chat message:', error);
+          }
+        });
+
+        socket.on('disconnect', (reason) => {
+          logger.info(`Client disconnected: ${socket.id}, reason: ${reason}`);
+          for (const [userId, sockets] of this.userSockets.entries()) {
+            const index = sockets.indexOf(socket.id);
+            if (index !== -1) {
+              sockets.splice(index, 1);
+              if (sockets.length === 0) {
+                this.userSockets.delete(userId);
+              }
+              logger.info(`User ${userId} disconnected from socket ${socket.id}`);
+              break;
+            }
+          }
+        });
+
+        // Send a connection confirmation to the client
+        socket.emit('connection:established', { status: 'connected', socketId: socket.id });
       });
 
-      this.setupEventHandlers();
-      this.isConnected = true;
-      logger.info('WebSocket service initialized successfully');
+      // Set up a health check interval
+      this.connectionCheckInterval = setInterval(() => {
+        if (this.io) {
+          const connectedClients = this.io.engine.clientsCount;
+          logger.debug(`WebSocket health check: ${connectedClients} clients connected`);
+        }
+      }, 30000); // Check every 30 seconds
 
-      // Verify connection immediately
-      this.checkConnection();
+      this.initialized = true;
+      logger.info('WebSocket service initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize WebSocket service:', error);
       throw error;
     }
   }
 
-  private setupEventHandlers(): void {
-    if (!this.io) return;
-
-    this.io.on('connection', (socket: Socket) => {
-      const userId = socket.data.userId;
-      logger.info(`Client connected: ${socket.id}`, {
-        userId,
-        transport: socket.conn.transport.name
+  public async sendToUser<T extends EventName>(
+    userId: string,
+    event: T,
+    data: EventData<T>
+  ): Promise<void> {
+    const eventName = String(event);
+    const isAIMessage = eventName === 'ai:message' || eventName === 'message';
+    
+    // Always log AI messages for debugging
+    if (isAIMessage) {
+      console.log(`Sending ${eventName} to user ${userId}:`, {
+        id: data.id,
+        content: typeof data.content === 'string' ? data.content.substring(0, 50) + '...' : data.content,
+        role: data.role,
+        metadata: data.metadata
       });
-
-      // Track user's sockets
-      if (!this.userSockets.has(userId)) {
-        this.userSockets.set(userId, new Set());
+    }
+    
+    if (!this.io || !this.initialized) {
+      // Only log once per session, not for every message
+      if (!isAIMessage) {
+        logger.warn(`Cannot send ${eventName} to user ${userId}: WebSocket service not initialized`);
       }
-      this.userSockets.get(userId)?.add(socket.id);
+      return;
+    }
 
-      // Initialize AI service with user ID
-      if (this.aiService && userId) {
-        this.aiService.initialize(userId).catch(error => {
-          logger.error('Failed to initialize AI service:', error);
-        });
+    // Skip entirely if no sockets and it's an AI message
+    if (!this.userSockets.has(userId) || this.userSockets.get(userId)!.length === 0) {
+      // Only log non-AI messages to reduce log spam
+      if (!isAIMessage) {
+        logger.warn(`No active sockets found for user ${userId}`);
+        this.queueMessageForUser(userId, eventName, data);
+      } else {
+        console.log(`No active sockets found for user ${userId} to send ${eventName}`);
       }
+      return;
+    }
 
-      socket.on('disconnect', (reason) => {
-        logger.info(`Client disconnected: ${socket.id}`, {
-          userId,
-          reason
-        });
-        this.userSockets.get(userId)?.delete(socket.id);
-        if (this.userSockets.get(userId)?.size === 0) {
-          this.userSockets.delete(userId);
-        }
-      });
+    const socketIds = this.userSockets.get(userId)!;
+    let sentSuccessfully = false;
 
-      // Handle message events
-      socket.on('message', (message: { type: string; data: any }) => {
+    for (const socketId of socketIds) {
+      try {
+        console.log(`Emitting ${eventName} to socket ${socketId}`);
+        this.io.to(socketId).emit(event, data);
+        sentSuccessfully = true;
+      } catch (error) {
+        console.error(`Failed to send ${eventName} to socket ${socketId}:`, error);
+      }
+    }
+
+    if (sentSuccessfully) {
+      // Only log non-AI messages or log at debug level for AI messages
+      if (isAIMessage) {
+        console.log(`Successfully sent ${eventName} to user ${userId}`);
+      } else {
+        logger.info(`Successfully sent ${eventName} to user ${userId}`);
+      }
+    } else {
+      // Only log errors for non-AI messages
+      if (!isAIMessage) {
+        logger.error(`Failed to send ${eventName} to any socket for user ${userId}`);
+        this.queueMessageForUser(userId, eventName, data);
+      } else {
+        console.error(`Failed to send ${eventName} to any socket for user ${userId}`);
+      }
+    }
+  }
+
+  private queueMessageForUser(userId: string, event: string, data: any): void {
+    if (!this.messageQueue.has(userId)) {
+      this.messageQueue.set(userId, []);
+    }
+    
+    this.messageQueue.get(userId)!.push({ event, data });
+    logger.info(`Message queued for user ${userId}: ${event}`);
+    
+    // Limit queue size to prevent memory issues
+    const userQueue = this.messageQueue.get(userId)!;
+    if (userQueue.length > 50) {
+      userQueue.shift(); // Remove oldest message if queue gets too large
+      logger.warn(`Message queue for user ${userId} exceeded 50 messages, oldest message removed`);
+    }
+  }
+
+  private sendQueuedMessages(userId: string): void {
+    if (!this.messageQueue.has(userId) || !this.userSockets.has(userId)) {
+      return;
+    }
+    
+    const userQueue = this.messageQueue.get(userId)!;
+    const userSocketIds = this.userSockets.get(userId)!;
+    
+    if (userQueue.length === 0 || userSocketIds.length === 0) {
+      return;
+    }
+    
+    logger.info(`Sending ${userQueue.length} queued messages to user ${userId}`);
+    
+    // Process all queued messages
+    const messagesToSend = [...userQueue]; // Create a copy to avoid modification issues
+    this.messageQueue.set(userId, []); // Clear the queue
+    
+    for (const { event, data } of messagesToSend) {
+      let sentSuccessfully = false;
+      
+      for (const socketId of userSocketIds) {
         try {
-          this.handleMessage(message);
+          this.io!.to(socketId).emit(event, data);
+          sentSuccessfully = true;
+          logger.debug(`Successfully sent queued ${event} to socket ${socketId}`);
         } catch (error) {
-          logger.error('Error handling message:', error);
+          logger.error(`Failed to send queued ${event} to socket ${socketId}:`, error);
         }
-      });
+      }
+      
+      if (!sentSuccessfully) {
+        // Re-queue the message if it couldn't be sent, but only if it's not an AI message
+        if (event !== 'ai:message' && event !== 'message') {
+          this.queueMessageForUser(userId, event, data);
+        }
+      }
+    }
+  }
 
-      // Handle errors
-      socket.on('error', (error) => {
-        logger.error('Socket error:', {
-          socketId: socket.id,
-          userId,
-          error
-        });
-      });
-    });
+  public async broadcast<T extends EventName>(
+    event: T,
+    data: EventData<T>
+  ): Promise<void> {
+    if (!this.initialized || !this.io) {
+      logger.warn('WebSocket service not initialized');
+      return;
+    }
+
+    this.io.emit(event, data);
   }
 
   private setupMonitoringEvents(): void {
     if (!this.monitoring) return;
 
     // Listen for monitoring events
-    this.monitoring.on('metrics-updated', (data: { health: SystemHealth; metrics: SystemMetrics }) => {
-      this.broadcast('metrics-updated', data);
+    this.monitoring.on('metrics:update', (data: { health: SystemHealth; metrics: SystemMetrics; timestamp: string }) => {
+      this.broadcast('metrics:update', data);
     });
 
-    this.monitoring.on('error-logged', (error: ErrorLog) => {
-      this.broadcast('error-logged', error);
-    });
-  }
-
-  private handleMessage(message: { type: string; data: any }): void {
-    try {
-      if (!message || !message.type) {
-        logger.warn('Invalid message format received');
-        return;
-      }
-
-      switch (message.type) {
-        case 'ai_message':
-          this.handleAIMessage(message.data);
-          break;
-        case 'metrics_update':
-          this.handleMetricsUpdate(message.data);
-          break;
-        case 'error_log':
-          this.handleErrorLog(message.data);
-          break;
-        case 'system_status':
-          this.handleSystemStatus(message.data);
-          break;
-        default:
-          // For any other message type, just emit it
-          this.emit(message.type, message.data);
-      }
-    } catch (error) {
-      logger.error('Error handling message:', error);
-    }
-  }
-
-  private async handleAIMessage(data: { content: string; userId: string }): Promise<void> {
-    try {
-      if (!this.aiService) {
-        throw new Error('AI service not initialized');
-      }
-
-      // Emit start event to show loading state
-      this.sendToUser(data.userId, {
-        type: 'ai:start'
-      });
-
-      // Create user message
-      const userMessage: AIMessage = {
-        id: crypto.randomUUID(),
-        content: data.content,
-        role: 'user',
-        timestamp: new Date().toISOString(),
-        metadata: {
-          type: 'chat',
-          timestamp: new Date().toISOString(),
-          read: true
-        }
-      };
-
-      // Send user message to client
-      this.sendToUser(data.userId, {
-        type: 'ai:message',
-        data: userMessage
-      });
-
-      // Process through AI service
-      const response = await this.aiService.processMessage(userMessage, data.userId);
-      
-      // Send AI response
-      this.sendToUser(data.userId, {
-        type: 'ai:message',
-        data: response
-      });
-
-      // Emit end event to hide loading state
-      this.sendToUser(data.userId, {
-        type: 'ai:end'
-      });
-    } catch (error) {
-      logger.error('Failed to process AI message:', error);
-      this.handleAIError(data.userId, error);
-    }
-  }
-
-  private handleAIError(userId: string, error: any): void {
-    const timestamp = new Date().toISOString();
-    const errorMessage: AIMessage = {
-      id: crypto.randomUUID(),
-      content: 'Sorry, I encountered an error. Please try again.',
-      role: 'system',
-      timestamp,
-      metadata: {
-        type: 'notification',
-        status: 'error',
-        category: 'ai',
-        timestamp,
-        read: false
-      }
-    };
-
-    this.sendToUser(userId, {
-      type: 'ai:message',
-      data: errorMessage
+    this.monitoring.on('error:new', (error: ErrorLog) => {
+      this.broadcast('error:new', error);
     });
 
-    this.sendToUser(userId, {
-      type: 'ai:end'
+    this.monitoring.on('error:analysis', (data: { error: ErrorLog; analysis: AIAnalysis }) => {
+      this.broadcast('error:analysis', data);
+    });
+
+    this.monitoring.on('error:log', (data: { type: string; data: LogEntry }) => {
+      this.broadcast('error:log', data);
+    });
+
+    this.monitoring.on('metrics:status', (data: { health: SystemHealth; metrics: SystemMetrics; timestamp: string }) => {
+      this.broadcast('metrics:status', data);
+    });
+
+    this.monitoring.on('activity:ai', (data: { type: string; data: { userId: string; action: string; timestamp: string; details: Record<string, any>; } }) => {
+      this.broadcast('activity:ai', data);
+    });
+
+    this.monitoring.on('activity:log', (data: { type: string; data: LogEntry }) => {
+      this.broadcast('activity:log', data);
+    });
+
+    this.monitoring.on('system:status', (data: { health: SystemHealth; metrics: SystemMetrics; timestamp: string }) => {
+      this.broadcast('system:status', data);
     });
   }
 
-  public sendToUser(userId: string, data: any): void {
-    const userSocketIds = this.userSockets.get(userId);
-    if (!userSocketIds) return;
-
-    for (const socketId of userSocketIds) {
-      this.sendToSocket(socketId, data.type || 'message', data);
-    }
-  }
-
-  private sendToSocket(socketId: string, event: string, data: any): void {
-    this.io?.to(socketId).emit(event, data);
-  }
-
-  public broadcast(event: string, data: any): void {
-    this.io?.emit(event, data);
-  }
-
-  public shutdown(): void {
+  public async shutdown(): Promise<void> {
     if (this.connectionCheckInterval) {
       clearInterval(this.connectionCheckInterval);
       this.connectionCheckInterval = null;
     }
-    
+
     if (this.io) {
-      this.io.close();
-      this.io = null;
+      await new Promise<void>((resolve) => {
+        this.io?.close(() => {
+          this.io = null;
+          this.initialized = false;
+          this.userSockets.clear();
+          WebSocketService.instance = null;
+          resolve();
+        });
+      });
     }
-    
-    this.isConnected = false;
-    logger.info('WebSocket service shut down');
+    logger.info('WebSocket service shut down successfully');
+  }
+
+  public getConnectionStatus(): boolean {
+    return this.initialized && this.io !== null;
+  }
+
+  public setMonitoringService(monitoring: MonitoringService): void {
+    this.monitoring = monitoring;
+    this.setupMonitoringEvents();
   }
 }
 
 export const getWebSocketService = WebSocketService.getInstance;
-export const initializeWebSocketService = (server: any): void => {
-  const wsService = WebSocketService.getInstance();
-  wsService.initialize(server);
+export const initializeWebSocketService = async (server: HTTPServer): Promise<void> => {
+  const wsService = await WebSocketService.getInstance();
+  await wsService.initialize(server);
 };

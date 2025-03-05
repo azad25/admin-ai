@@ -10,7 +10,7 @@ import {
   Box,
 } from '@mui/material';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import { api } from '../../services/api';
 import { WidgetType } from '@admin-ai/shared';
 
 interface AddWidgetDialogProps {
@@ -34,7 +34,7 @@ export default function AddWidgetDialog({ open, onClose }: AddWidgetDialogProps)
 
   const { mutate, isPending } = useMutation({
     mutationFn: async () => {
-      const { data } = await axios.post(`${import.meta.env.VITE_API_URL}/api/widgets`, {
+      const { data } = await api.post('/widgets', {
         name,
         type,
         config: getDefaultConfig(type),

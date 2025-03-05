@@ -509,10 +509,10 @@ const SystemStatus: React.FC = () => {
                       <TableRow key={index}>
                         <TableCell>{formatDate(log.timestamp)}</TableCell>
                         <TableCell>
-                          <Tooltip title={log.stack || ''}>
+                          <Tooltip title={log.error && typeof log.error === 'object' && log.error.stack ? log.error.stack : ''}>
                             <Box>
                               <Typography variant="body2" color="error">
-                                {log.error}
+                                {typeof log.error === 'object' ? log.error.message : log.error}
                               </Typography>
                               {log.metadata && (
                                 <Typography variant="caption" color="text.secondary">
@@ -564,8 +564,8 @@ const SystemStatus: React.FC = () => {
                           />
                         </TableCell>
                         <TableCell>
-                          <Tooltip title={`IP: ${log.ip}`}>
-                            <Typography variant="body2">{log.userId}</Typography>
+                          <Tooltip title={`User: ${log.user?.email || 'Unknown'}`}>
+                            <Typography variant="body2">{log.user?.id || 'Unknown'}</Typography>
                           </Tooltip>
                         </TableCell>
                         <TableCell>

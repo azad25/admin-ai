@@ -5,8 +5,23 @@ import fs from 'fs';
 
 // Create logs directory if it doesn't exist
 const logsDir = path.join(process.cwd(), 'logs');
-if (!fs.existsSync(logsDir)) {
-  fs.mkdirSync(logsDir);
+
+export async function initializeLogging(): Promise<void> {
+  try {
+    // Create logs directory if it doesn't exist
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir);
+    }
+
+    // Set permissions for logs directory
+    await fs.promises.chmod(logsDir, 0o755);
+    logger.info('Set permissions for logs directory');
+    logger.info('Logs directory setup completed successfully');
+    logger.info('Logging system initialized');
+  } catch (error) {
+    logger.error('Failed to initialize logging system:', error);
+    throw error;
+  }
 }
 
 // Custom format for log files

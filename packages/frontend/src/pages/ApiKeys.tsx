@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
@@ -22,7 +22,7 @@ import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon } from '@mui/ico
 import { ApiKey } from '@admin-ai/shared';
 import { apiKeyService } from '../services/apiKeys';
 
-export default function ApiKeys() {
+export const ApiKeys: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [openDialog, setOpenDialog] = useState(false);
   const [editingKey, setEditingKey] = useState<ApiKey | null>(null);

@@ -48,7 +48,6 @@ export const WidgetSchema = z.object({
     width: z.number(),
     height: z.number(),
   }),
-  userId: z.string().uuid(),
 });
 
 // CRUD Page schemas
@@ -86,7 +85,7 @@ export const CrudPageSchema = z.object({
   userId: z.string().uuid(),
 });
 
-// Export types
+// Export inferred types
 export type User = z.infer<typeof UserSchema>;
 export type CreateUser = z.infer<typeof CreateUserSchema>;
 export type ApiKey = z.infer<typeof ApiKeySchema>;
@@ -94,4 +93,34 @@ export type WidgetType = z.infer<typeof WidgetTypeSchema>;
 export type Widget = z.infer<typeof WidgetSchema>;
 export type CrudField = z.infer<typeof CrudFieldSchema>;
 export type CrudPage = z.infer<typeof CrudPageSchema>;
-export type CreateCrudPage = z.infer<typeof CreateCrudPageSchema>; 
+export type CreateCrudPage = z.infer<typeof CreateCrudPageSchema>;
+
+// Export common types
+export type { LLMProvider } from './common.js';
+
+// Export types from other modules
+export type {
+  AIProviderConfig,
+  AIMessage,
+  AIMessageMetadata,
+  AICommand,
+  AISystemStatus,
+  AISettings,
+  AIAnalysis,
+  AIAnalysisResult,
+  ResourceStatus,
+  SystemMetrics,
+  RequestMetric
+} from './ai.js';
+
+export type {
+  LLMConfig,
+  LLMResponse
+} from './llm.js';
+
+export type {
+  BaseLog,
+  ErrorLog,
+  RequestLog,
+  AuditLog
+} from './logs.js'; 

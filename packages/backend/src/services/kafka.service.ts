@@ -232,7 +232,7 @@ export class KafkaService {
     }
     if (message.userId) {
       const timestamp = Date.now().toString();
-      this.wsService.sendToUser(message.userId, {
+      this.wsService.sendToUser(message.userId, 'ai:message', {
         id: crypto.randomUUID(),
         content: `AI Task ${message.type}: ${message.data?.taskName || 'Unknown task'}`,
         role: 'system',
@@ -254,9 +254,9 @@ export class KafkaService {
       logger.warn('WebSocket service not initialized, skipping notification');
       return;
     }
-    this.wsService.broadcast('metrics_update', {
-      type: message.type,
-      data: message.data,
+    this.wsService.broadcast('metrics:update', {
+      health: message.data?.health,
+      metrics: message.data?.metrics,
       timestamp: message.timestamp
     });
   }
@@ -267,16 +267,18 @@ export class KafkaService {
       return;
     }
     if (message.userId) {
-      this.wsService.sendToUser(message.userId, {
+      const timestamp = Date.now().toString();
+      this.wsService.sendToUser(message.userId, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Error: ${message.data?.message || 'Unknown error'}`,
         role: 'system',
+        timestamp,
         metadata: {
           type: 'notification',
           status: 'error',
           category: 'system',
           source: message.metadata?.source,
-          timestamp: Date.now(),
+          timestamp,
           read: false
         }
       });
@@ -304,7 +306,7 @@ export class KafkaService {
           read: false,
         },
       };
-      this.wsService?.sendToUser(message.userId, aiMessage);
+      this.wsService?.sendToUser(message.userId, 'ai:message', aiMessage);
     }
   }
 
@@ -315,7 +317,7 @@ export class KafkaService {
     }
     if (message.userId) {
       const timestamp = Date.now().toString();
-      this.wsService.sendToUser(message.userId, {
+      this.wsService.sendToUser(message.userId, 'ai:message', {
         id: crypto.randomUUID(),
         content: message.data?.message || 'New notification',
         role: 'system',
@@ -455,7 +457,7 @@ export class KafkaService {
         read: false,
       },
     };
-    await this.wsService?.sendToUser(userId, aiMessage);
+    await this.wsService?.sendToUser(userId, 'ai:message', aiMessage);
   }
 
   private async sendWebSocketError(userId: string, error: any) {
@@ -479,7 +481,7 @@ export class KafkaService {
         read: false,
       },
     };
-    await this.wsService?.sendToUser(userId, aiMessage);
+    await this.wsService?.sendToUser(userId, 'ai:message', aiMessage);
   }
 }
 

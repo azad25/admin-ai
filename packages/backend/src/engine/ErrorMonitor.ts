@@ -40,7 +40,7 @@ export class ErrorMonitor extends EventEmitter {
     });
 
     // Handle unhandled promise rejections
-    process.on('unhandledRejection', (reason: any) => {
+    process.on('unhandledRejection', (reason: unknown) => {
       this.handleError('unhandled_rejection', reason);
     });
 
@@ -50,7 +50,7 @@ export class ErrorMonitor extends EventEmitter {
     });
   }
 
-  public handleError(type: string, error: Error | any, metadata?: Record<string, any>): void {
+  public handleError(type: string, error: Error | unknown, metadata?: Record<string, unknown>): void {
     if (!this.isMonitoring) {
       return;
     }
@@ -58,8 +58,8 @@ export class ErrorMonitor extends EventEmitter {
     const errorLog: ErrorLog = {
       timestamp: new Date(),
       type,
-      message: error.message || String(error),
-      stack: error.stack,
+      message: this.getErrorMessage(error),
+      stack: this.getErrorStack(error),
       metadata
     };
 
@@ -84,15 +84,29 @@ export class ErrorMonitor extends EventEmitter {
     }
   }
 
-  private isCriticalError(type: string, error: any): boolean {
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return String(error);
+  }
+
+  private getErrorStack(error: unknown): string | undefined {
+    if (error instanceof Error) {
+      return error.stack;
+    }
+    return undefined;
+  }
+
+  private isCriticalError(type: string, error: unknown): boolean {
     // Define conditions for critical errors
     const criticalConditions = [
       type === 'uncaught_exception',
-      error.fatal === true,
-      error.code === 'ECONNREFUSED',
-      error.code === 'ETIMEDOUT',
-      error.message?.includes('OutOfMemory'),
-      error.message?.includes('Database connection lost')
+      (error as { fatal?: boolean })?.fatal === true,
+      (error as { code?: string })?.code === 'ECONNREFUSED',
+      (error as { code?: string })?.code === 'ETIMEDOUT',
+      (error as { message?: string })?.message?.includes('OutOfMemory'),
+      (error as { message?: string })?.message?.includes('Database connection lost')
     ];
 
     return criticalConditions.some(condition => condition);
@@ -149,4 +163,4 @@ export class ErrorMonitor extends EventEmitter {
     this.errorLogs = [];
     logger.info('Error logs cleared');
   }
-} 
+}

@@ -4,7 +4,7 @@
   "private": true,
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
+    "dev": "JWT_SECRET=admin_ai_development_secret_key_change_in_production ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "clean": "rimraf dist",
@@ -38,6 +38,7 @@
     "pg": "^8.11.3",
     "reflect-metadata": "^0.2.1",
     "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
     "sqlite": "^5.1.1",
     "sqlite3": "^5.1.7",
     "typeorm": "^0.3.20",

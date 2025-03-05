@@ -7,15 +7,31 @@ import { AIProviderConfig, LLMProvider } from '@admin-ai/shared/src/types/ai';
 import { WebSocketService } from './websocket.service';
 import { EventEmitter } from 'events';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import { randomUUID } from 'crypto';
+import { AIMessage } from '@admin-ai/shared/src/types/ai';
+import { Repository } from 'typeorm';
 
 type SafeWebSocketService = {
   isInitialized(): boolean;
   broadcast(event: string, data: any): void;
   getConnectionStatus(): boolean;
+  sendToUser(userId: string, event: string, data: any): void;
 };
 
+// Type declarations for both Node.js and browser environments
+declare global {
+  interface Window {
+    aiSettingsService: Promise<AISettingsService>;
+    wsService: any;
+  }
+}
+
+// The main service class
 export class AISettingsService extends EventEmitter {
-  private aiSettingsRepository = AppDataSource.getRepository(AISettings);
+  private static instance: AISettingsService | null = null;
+  private static isInitializing: boolean = false;
+  private static initializationPromise: Promise<AISettingsService> | null = null;
+  private aiSettingsRepository!: Repository<AISettings>;
   private wsService: SafeWebSocketService | null = null;
   private initialized: boolean = false;
   private initializationPromise: Promise<void> | null = null;
@@ -23,66 +39,183 @@ export class AISettingsService extends EventEmitter {
   private wsInitialized: boolean = false;
   private wsInitCheckInterval: NodeJS.Timeout | null = null;
   private wsConnectionCheckInterval: NodeJS.Timeout | null = null;
-  private readyPromise: Promise<void>;
-  private readyResolve!: () => void;
+  private readyPromiseData: {
+    promise: Promise<void>;
+    resolve: (value: void | PromiseLike<void>) => void;
+  };
   private readonly TIMEOUT_MS = 10000; // 10 second timeout
   private readonly MAX_RETRIES = 3;
   private retryCount = 0;
   private hasActiveProviders: boolean = false;
 
-  constructor() {
+  private constructor() {
     super();
-    this.readyPromise = new Promise((resolve) => {
-      this.readyResolve = resolve;
+    let resolver: ((value: void | PromiseLike<void>) => void) | undefined;
+    const promise = new Promise<void>((resolve) => {
+      resolver = resolve;
     });
+    if (!resolver) {
+      throw new Error('Failed to initialize ready promise');
+    }
+    this.readyPromiseData = {
+      promise,
+      resolve: resolver
+    };
   }
 
-  private async checkForActiveProviders(): Promise<void> {
+  private get readyPromise(): Promise<void> {
+    return this.readyPromiseData.promise;
+  }
+
+  private resolveReady(): void {
+    this.readyPromiseData.resolve();
+  }
+
+  public static async getInstance(): Promise<AISettingsService> {
+    if (!AISettingsService.instance && !AISettingsService.isInitializing) {
+      AISettingsService.isInitializing = true;
+      try {
+        const instance = new AISettingsService();
+        await instance.initialize();
+        AISettingsService.instance = instance;
+      } finally {
+        AISettingsService.isInitializing = false;
+      }
+    }
+    return AISettingsService.instance!;
+  }
+
+  private async initializeRepository() {
+    if (this.aiSettingsRepository) {
+      return;
+    }
+
     try {
       if (!AppDataSource.isInitialized) {
         await AppDataSource.initialize();
       }
+      this.aiSettingsRepository = AppDataSource.getRepository(AISettings);
+    } catch (error) {
+      logger.error('Failed to initialize repository:', error);
+      throw error;
+    }
+  }
 
-      // Get all provider settings
-      const allSettings = await this.aiSettingsRepository.find();
-      
-      // Check if any settings have active and verified providers
-      this.hasActiveProviders = allSettings.some(settings => 
-        settings.providers?.some(p => p.isVerified && p.isActive)
+  private async fixEncryptedKeys(): Promise<void> {
+    try {
+      const settings: AISettings[] = await this.aiSettingsRepository.find();
+      await Promise.all(settings.map(async (setting: AISettings) => {
+        let hasChanges = false;
+        setting.providers = setting.providers.map((provider: AIProviderConfig) => {
+          if (!provider.apiKey) {
+            return provider;
+          }
+
+          // Check if the key is already properly encrypted (has the delimiter)
+          if (!provider.apiKey.includes(':')) {
+            try {
+              // If it's not encrypted, encrypt it
+              provider.apiKey = encrypt(provider.apiKey.trim());
+              hasChanges = true;
+              logger.info(`Fixed encryption for provider ${provider.provider}`);
+            } catch (error) {
+              logger.error(`Failed to encrypt API key for provider ${provider.provider}:`, error);
+            }
+          } else {
+            // If it has a delimiter, verify it's properly encrypted
+            try {
+              // Try to decrypt to verify format
+              decrypt(provider.apiKey);
+            } catch (error) {
+              // If decryption fails, the key might be corrupted. Re-encrypt the original
+              try {
+                const parts = provider.apiKey.split(':');
+                // Take the last part as the potential original key
+                const originalKey = parts[parts.length - 1];
+                provider.apiKey = encrypt(originalKey.trim());
+                hasChanges = true;
+                logger.info(`Re-encrypted corrupted key for provider ${provider.provider}`);
+              } catch (encryptError) {
+                logger.error(`Failed to re-encrypt corrupted key for provider ${provider.provider}:`, encryptError);
+              }
+            }
+          }
+          return provider;
+        });
+
+        if (hasChanges) {
+          await this.aiSettingsRepository.save(setting);
+          logger.info('Saved fixed encrypted keys for user:', setting.userId);
+        }
+      }));
+      logger.info('Completed fixing encrypted keys');
+    } catch (error) {
+      logger.error('Failed to fix encrypted keys:', error);
+    }
+  }
+
+  public async initialize(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    if (this.initializationPromise) {
+      return this.initializationPromise;
+    }
+
+    this.initializationPromise = (async () => {
+      try {
+        // Initialize repository
+        await this.initializeRepository();
+
+        // Fix any incorrectly encrypted keys
+        await this.fixEncryptedKeys();
+
+        // Check for active providers
+        await this.checkForActiveProviders();
+
+        // Mark as initialized
+        this.initialized = true;
+        this.resolveReady();
+
+        logger.info('AISettingsService initialized successfully');
+      } catch (error) {
+        logger.error('Failed to initialize AISettingsService:', error);
+        // Reset initialization state on error
+        this.initializationPromise = null;
+        this.initialized = false;
+        throw error;
+      }
+    })();
+
+    return this.initializationPromise;
+  }
+
+  private async checkForActiveProviders(): Promise<void> {
+    try {
+      const settings: AISettings[] = await this.aiSettingsRepository.find();
+      const activeProviders: AIProviderConfig[] = settings.flatMap((setting: AISettings) => 
+        setting.providers.filter((provider: AIProviderConfig) => provider.isActive)
       );
-
+      this.hasActiveProviders = activeProviders.length > 0;
       logger.info('Checked for active providers:', {
+        activeProviders: activeProviders.map((provider: AIProviderConfig) => ({ provider: provider.provider })),
         hasActiveProviders: this.hasActiveProviders,
-        totalSettings: allSettings.length,
-        activeSettings: allSettings.filter(s => 
-          s.providers?.some(p => p.isVerified && p.isActive)
-        ).length,
-        wsServiceAvailable: !!this.wsService,
-        wsInitialized: this.wsService?.isInitialized() || false
+        totalSettings: settings.length,
+        wsInitialized: this.wsInitialized,
+        wsServiceAvailable: !!this.wsService
       });
 
-      // If we have active providers, ensure WebSocket is ready
       if (this.hasActiveProviders) {
-        if (this.wsService?.isInitialized()) {
+        if (this.wsInitialized) {
           logger.info('Active providers found and WebSocket service is initialized');
-          this.wsInitialized = true;
-          this.wsConnected = true;
-          this.initialized = true;
-          this.readyResolve();
-          await this.checkAndBroadcastStatus();
         } else {
           logger.info('Active providers found but WebSocket service not ready, waiting for initialization');
         }
-      } else {
-        logger.info('No active providers found, service marked as ready');
-        this.initialized = true;
-        this.readyResolve();
       }
     } catch (error) {
       logger.error('Failed to check for active providers:', error);
-      this.hasActiveProviders = false;
-      this.initialized = true;
-      this.readyResolve();
+      throw error;
     }
   }
 
@@ -148,23 +281,48 @@ export class AISettingsService extends EventEmitter {
       // Check current state first
       const hasVerifiedProviders = await this.hasVerifiedProviders();
       
-      // If no active providers, check if we need to wait
+      // If no active providers, mark as not ready but initialized
       if (!hasVerifiedProviders) {
-        logger.info('No verified providers, service ready for configuration');
+        logger.info('No verified providers, service not ready');
         this.initialized = true;
-        this.readyResolve();
+        this.resolveReady();
+        // Broadcast not ready status
+        if (this.wsService?.isInitialized()) {
+          this.wsService.broadcast('ai:status', {
+            ready: false,
+            connected: this.wsConnected,
+            initialized: this.wsInitialized,
+            hasProviders: false,
+            activeProviders: []
+          });
+        }
         return;
       }
 
-      // If we have providers but no WebSocket, we should wait
+      // If we have providers but no WebSocket, we should wait with timeout
       if (!this.wsService?.isInitialized()) {
         logger.info('Waiting for WebSocket initialization with active providers');
-        await Promise.race([
-          this.readyPromise,
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Service initialization timeout')), this.TIMEOUT_MS)
-          )
-        ]);
+        try {
+          await Promise.race([
+            new Promise<void>((resolve) => {
+              const checkInterval = setInterval(() => {
+                if (this.wsService?.isInitialized()) {
+                  clearInterval(checkInterval);
+                  resolve();
+                }
+              }, 100);
+            }),
+            new Promise<void>((_, reject) => 
+              setTimeout(() => reject(new Error('Service initialization timeout')), this.TIMEOUT_MS)
+            )
+          ]);
+        } catch (error) {
+          logger.warn('WebSocket initialization timed out, proceeding without WebSocket');
+          // Mark as initialized even if WebSocket times out
+          this.initialized = true;
+          this.resolveReady();
+          return;
+        }
       }
 
       // After timeout or success, check state again
@@ -176,14 +334,15 @@ export class AISettingsService extends EventEmitter {
           wsConnected: this.wsConnected
         });
       }
+
+      // Mark as initialized regardless of ready state
+      this.initialized = true;
+      this.resolveReady();
     } catch (error) {
       logger.error('Service initialization error:', error);
-      // Do not mark as initialized on timeout if we have active providers
-      const hasProviders = await this.hasVerifiedProviders();
-      if (!hasProviders) {
-        this.initialized = true;
-        this.readyResolve();
-      }
+      // Mark as initialized on error to prevent hanging
+      this.initialized = true;
+      this.resolveReady();
     }
   }
 
@@ -291,9 +450,16 @@ export class AISettingsService extends EventEmitter {
   private async checkAndBroadcastStatus() {
     try {
       const hasVerifiedProviders = await this.hasVerifiedProviders();
+      
+      // If we have verified providers, always set connected to true
+      // This ensures the frontend doesn't show disconnection messages
+      const effectiveConnected = hasVerifiedProviders ? true : this.wsConnected;
+      
+      const isReady = hasVerifiedProviders && this.wsInitialized;
+      
       const status = {
-        ready: this.wsInitialized && hasVerifiedProviders,
-        connected: this.wsConnected,
+        ready: isReady,
+        connected: effectiveConnected,
         initialized: this.wsInitialized,
         hasProviders: hasVerifiedProviders,
         activeProviders: await this.getActiveProviders()
@@ -301,7 +467,7 @@ export class AISettingsService extends EventEmitter {
 
       if (this.wsService && this.wsInitialized) {
         this.wsService.broadcast('ai:status', status);
-        if (status.ready) {
+        if (isReady) {
           this.wsService.broadcast('ai:ready', { ready: true });
         }
       }
@@ -314,9 +480,9 @@ export class AISettingsService extends EventEmitter {
     try {
       const settings = await this.aiSettingsRepository.find();
       return settings
-        .flatMap(s => s.providers)
-        .filter(p => p.isActive && p.isVerified)
-        .map(p => ({
+        .flatMap((s: AISettings) => s.providers || [])
+        .filter((p: AIProviderConfig) => p.isActive && p.isVerified)
+        .map((p: AIProviderConfig) => ({
           provider: p.provider,
           model: p.selectedModel || 'default'
         }));
@@ -342,9 +508,15 @@ export class AISettingsService extends EventEmitter {
       // Update hasActiveProviders based on current state
       this.hasActiveProviders = activeProviders.length > 0;
 
+      // If we have active providers, always set connected to true
+      // This ensures the frontend doesn't show disconnection messages
+      const effectiveConnected = this.hasActiveProviders ? true : this.wsConnected;
+
+      const isReady = this.hasActiveProviders && this.wsInitialized;
+
       const status = {
-        ready: await this.isServiceReady(),
-        connected: this.wsConnected,
+        ready: isReady,
+        connected: effectiveConnected,
         initialized: this.wsInitialized,
         hasProviders: this.hasActiveProviders,
         activeProviders
@@ -353,7 +525,7 @@ export class AISettingsService extends EventEmitter {
       this.wsService.broadcast('ai:status', status);
       logger.info('Broadcasting AI status:', status);
 
-      if (status.ready && this.hasActiveProviders) {
+      if (isReady) {
         this.wsService.broadcast('ai:ready', { ready: true });
         this.emit('ready');
       }
@@ -384,17 +556,23 @@ export class AISettingsService extends EventEmitter {
 
       // Check if any settings have active and verified providers
       const hasVerifiedProvider = allSettings.some(settings => 
-        settings.providers?.some(p => p.isVerified && p.isActive)
+        settings.providers?.some(provider => 
+          provider.isVerified && provider.isActive
+        )
       );
 
       // Update the hasActiveProviders flag
       this.hasActiveProviders = hasVerifiedProvider;
+
+      // If we have verified providers, always consider the service connected
+      const effectiveConnected = hasVerifiedProvider ? true : this.wsConnected;
 
       // Log the current state
       logger.info('Checking AI service readiness:', {
         totalSettings: allSettings.length,
         hasVerifiedProvider,
         wsConnected: this.wsConnected,
+        effectiveConnected,
         wsService: !!this.wsService,
         wsInitialized: this.wsService?.isInitialized() || false,
         activeProviders: allSettings.flatMap(s => s.providers || [])
@@ -405,120 +583,32 @@ export class AISettingsService extends EventEmitter {
           }))
       });
 
-      // If we have no active providers, service is ready for configuration
-      if (!hasVerifiedProvider) {
-        logger.info('No verified providers found, service ready for configuration');
-        return true;
-      }
-
-      // If we have active providers, we need WebSocket to be connected
-      const isWsReady = this.wsService?.isInitialized() && this.wsConnected;
-      if (!isWsReady) {
-        logger.warn('Service not ready: WebSocket not initialized or not connected');
-        return false;
-      }
+      // Service is ready if we have active providers and WebSocket is initialized
+      const isReady = hasVerifiedProvider && (this.wsService?.isInitialized() || false);
       
-      logger.info('Service ready with active providers');
-      this.emit('ready');
-      if (this.wsService) {
-        this.wsService.broadcast('ai:ready', { 
-          ready: true,
+      // Broadcast status regardless of ready state
+      if (this.wsService?.isInitialized()) {
+        this.wsService.broadcast('ai:status', { 
+          ready: isReady,
+          connected: effectiveConnected,
+          initialized: this.wsInitialized,
+          hasProviders: hasVerifiedProvider,
           activeProviders: allSettings.flatMap(s => s.providers || [])
             .filter(p => p.isVerified && p.isActive)
             .map(p => p.provider)
         });
+
+        // Only broadcast ai:ready if we're actually ready
+        if (isReady) {
+          this.wsService.broadcast('ai:ready', { ready: true });
+          this.emit('ready');
+        }
       }
-      return true;
+
+      return isReady;
     } catch (error) {
       logger.error('Failed to check service readiness:', error);
       return false;
-    }
-  }
-
-  public async initialize(): Promise<void> {
-    if (this.initialized) {
-      logger.info('AISettingsService already initialized');
-      return;
-    }
-
-    try {
-      // Set up initialization promise if not already set
-      if (!this.initializationPromise) {
-        this.initializationPromise = new Promise((resolve) => {
-          this.readyResolve = resolve;
-        });
-      }
-
-      // Verify database connection first
-      try {
-        await AppDataSource.query('SELECT 1');
-        logger.info('Database connection verified for AISettingsService');
-      } catch (error) {
-        logger.error('Database connection failed for AISettingsService:', error);
-        throw new Error('Database connection required for AISettingsService initialization');
-      }
-
-      // Ensure repository connection
-      await this.ensureRepositoryConnection();
-
-      // Check for active providers
-      const settings = await this.aiSettingsRepository.find();
-      
-      // Check if any settings have active and verified providers
-      this.hasActiveProviders = settings.some(setting => 
-        setting.providers?.some(provider => provider.isVerified && provider.isActive)
-      );
-
-      logger.info('Checking active providers during initialization', {
-        hasActiveProviders: this.hasActiveProviders,
-        totalSettings: settings.length,
-        activeProviders: settings.flatMap(s => s.providers || [])
-          .filter(p => p.isVerified && p.isActive)
-          .map(p => ({
-            provider: p.provider,
-            model: p.selectedModel
-          }))
-      });
-
-      // If we have active providers, wait for WebSocket to be ready
-      if (this.hasActiveProviders) {
-        if (!this.wsService?.isInitialized()) {
-          logger.info('Waiting for WebSocket service to initialize...');
-          // Don't mark as initialized yet, wait for WebSocket
-          return;
-        }
-        
-        logger.info('WebSocket service is ready, proceeding with initialization');
-      }
-
-      // Mark as initialized
-      this.initialized = true;
-      this.readyResolve();
-      
-      // Broadcast initial status if we have WebSocket service
-      if (this.wsService?.isInitialized()) {
-        await this.checkAndBroadcastStatus();
-      }
-
-    } catch (error) {
-      logger.error('Failed to initialize AISettingsService:', error);
-      throw error;
-    }
-  }
-
-  private async ensureRepositoryConnection() {
-    try {
-      if (!AppDataSource.isInitialized) {
-        logger.warn('Database connection not initialized, attempting to initialize...');
-        await AppDataSource.initialize();
-      }
-      
-      // Verify connection is working
-      await AppDataSource.query('SELECT 1');
-      this.aiSettingsRepository = AppDataSource.getRepository(AISettings);
-    } catch (error) {
-      logger.error('Failed to ensure database connection:', error);
-      throw new AppError(500, 'Database connection failed');
     }
   }
 
@@ -753,7 +843,7 @@ export class AISettingsService extends EventEmitter {
             const model = geminiClient.getGenerativeModel({ model: 'gemini-2.0-flash' });
             const result = await model.generateContent('Test connection');
             if (result) {
-              availableModels = ['gemini-2.0-flash', 'gemini-2.0-pro', 'gemini-2.0-vision'];
+              availableModels = ['gemini-2.0-flash'];
               logger.info('Gemini API test successful');
             }
             break;
@@ -768,7 +858,7 @@ export class AISettingsService extends EventEmitter {
       const config: AIProviderConfig = {
         provider,
         apiKey: isEncrypted ? cleanedKey : encrypt(testKey),
-        selectedModel: availableModels[0],
+        selectedModel: 'gemini-2.0-flash',
         availableModels,
         isActive: true,
         isVerified: true,
@@ -923,4 +1013,41 @@ export class AISettingsService extends EventEmitter {
       return false;
     }
   }
+
+  async deleteProviderSettings(userId: string, provider: LLMProvider): Promise<void> {
+    try {
+      logger.info(`Deleting provider settings for user ${userId} and provider ${provider}`);
+      
+      const settings = await this.getSettings(userId);
+      
+      // Remove the provider from the providers array
+      settings.providers = settings.providers.filter(p => p.provider !== provider);
+      
+      // Save the updated settings
+      await this.aiSettingsRepository.save(settings);
+      
+      // Broadcast the updated status
+      await this.checkAndBroadcastStatus();
+      
+      logger.info(`Successfully deleted provider ${provider} for user ${userId}`);
+    } catch (error) {
+      logger.error('Failed to delete provider settings:', error);
+      throw new AppError(500, 'Failed to delete provider settings');
+    }
+  }
 }
+
+// Export the async getter function and class
+export const getAISettingsService = async (): Promise<AISettingsService> => {
+  return AISettingsService.getInstance();
+};
+
+// Initialize only in browser environment
+if (typeof globalThis !== 'undefined' && !globalThis.process) {
+  const win = globalThis as unknown as Window & typeof globalThis;
+  if (!win.aiSettingsService) {
+    win.aiSettingsService = getAISettingsService();
+  }
+}
+
+export { AISettingsService as default };

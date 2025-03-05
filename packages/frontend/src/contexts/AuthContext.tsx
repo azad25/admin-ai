@@ -1,251 +1,217 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
-import { authService } from '../services/auth';
-import { logger } from '../utils/logger';
+import { User } from '@admin-ai/shared';
+import { authService, LoginCredentials } from '../services/auth';
 import { wsService } from '../services/websocket.service';
+import { logger } from '../utils/logger';
+import { initializeServices } from '../services/initialize';
 
-export interface User {
-  id: string;
-  email: string;
-  name: string;
-  role: string;
-}
-
-export interface AuthContextType {
+interface AuthContextType {
   user: User | null;
-  isAuthenticated: boolean;
   loading: boolean;
   error: string | null;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  register: (email: string, password: string, name: string) => Promise<void>;
-  changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  register: (name: string, email: string, password: string) => Promise<void>;
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | null>(null);
 
-export const useAuth = () => useContext(AuthContext);
+interface AuthProviderProps {
+  children: ReactNode;
+}
 
-export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const location = useLocation();
 
-  const handleAuthStateChange = useCallback(async (token: string | null) => {
-    try {
-      if (!token) {
-        // Clear everything if no token
-        authService.setToken(null);
-        wsService.disconnect();
-        setUser(null);
-        setError(null);
-        
-        // Only redirect if we're not already on an auth page and not in the initial loading state
-        if (!loading && !location.pathname.match(/^\/(login|register)$/)) {
-          navigate('/login', { replace: true });
-        }
-        return;
-      }
-
-      // Set token in auth service first
-      authService.setToken(token);
-      
+  // Check if user is already logged in
+  useEffect(() => {
+    const checkAuth = async () => {
       try {
-        // Get current user with the token
-        const user = await authService.getCurrentUser();
-        setUser(user);
-        setError(null);
-
-        // Set up WebSocket with the token after user is confirmed
-        wsService.setToken(token);
-        wsService.connect(); // Explicitly connect after setting token
-
-        // If we're on the login page but already authenticated, redirect to home
-        // Only redirect if we have a valid user and we're not in the process of refreshing
-        if (location.pathname === '/login' && user) {
-          navigate('/', { replace: true });
-        }
-      } catch (error: any) {
-        // Handle specific API errors
-        const message = error?.response?.data?.message || 'Authentication failed. Please log in again.';
-        logger.error('Authentication error:', error);
-        
-        // Only clear auth state and redirect if it's not a token refresh error
-        if (!error.response?.data?.refreshToken) {
-          setError(message);
-          authService.setToken(null);
-          wsService.disconnect();
-          setUser(null);
+        const token = authService.getToken();
+        if (token) {
+          logger.debug('Token found, checking authentication');
+          const currentUser = await authService.getCurrentUser();
+          setUser(currentUser);
           
-          // Only redirect if we're not already on an auth page
-          if (!location.pathname.match(/^\/(login|register)$/)) {
-            navigate('/login', { replace: true });
+          // Connect to WebSocket with the token
+          try {
+            await wsService.connect(token);
+          } catch (wsError) {
+            logger.error('Failed to connect to WebSocket:', wsError);
+            // Don't fail auth if WebSocket fails
           }
         }
-      }
-    } catch (error: any) {
-      logger.error('Auth state change failed:', error);
-      const message = error?.response?.data?.message || 'An unexpected error occurred.';
-      setError(message);
-      
-      // Clear everything on error
-      authService.setToken(null);
-      wsService.disconnect();
-      setUser(null);
-      
-      // Only redirect if we're not already on an auth page
-      if (!location.pathname.match(/^\/(login|register)$/)) {
-        navigate('/login', { replace: true });
-      }
-    }
-  }, [navigate, location.pathname, loading]);
-
-  // Initial auth check
-  useEffect(() => {
-    const initAuth = async () => {
-      try {
-        setLoading(true);
-        const token = authService.getToken();
-        await handleAuthStateChange(token);
       } catch (error) {
-        logger.error('Initial auth check failed:', error);
+        logger.error('Authentication check failed:', error);
+        // Clear token if it's invalid
+        authService.setToken(null);
       } finally {
         setLoading(false);
       }
     };
 
-    initAuth();
-  }, [handleAuthStateChange]);
+    checkAuth();
+  }, []);
 
-  // Listen for storage events (token changes in other tabs)
+  // Listen for storage events (for multi-tab support)
   useEffect(() => {
-    const handleStorageChange = (e: StorageEvent) => {
-      if (e.key === 'auth_token') {
-        handleAuthStateChange(e.newValue);
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key === 'auth_token') {
+        if (!event.newValue) {
+          // Token was removed in another tab
+          setUser(null);
+          if (location.pathname !== '/login') {
+            navigate('/login');
+          }
+        } else if (event.newValue !== event.oldValue) {
+          // Token was changed in another tab
+          authService.getCurrentUser()
+            .then(setUser)
+            .catch(() => {
+              setUser(null);
+              navigate('/login');
+            });
+        }
       }
     };
 
     window.addEventListener('storage', handleStorageChange);
-    return () => window.removeEventListener('storage', handleStorageChange);
-  }, [handleAuthStateChange]);
+    window.addEventListener('auth-error', () => {
+      setUser(null);
+      navigate('/login');
+    });
 
-  // Listen for auth error events
-  useEffect(() => {
-    const handleAuthError = (error: any) => {
-      // Only clear auth state if it's a fatal error
-      if (error?.message?.includes('Authentication failed') || error?.message?.includes('Token expired')) {
-        setUser(null);
-        setError('Your session has expired. Please log in again.');
-        if (!location.pathname.match(/^\/(login|register)$/)) {
-          navigate('/login', { replace: true });
-        }
-      } else {
-        // For other errors, just set the error message but don't log out
-        setError(error?.message || 'Connection error. Please try again.');
-      }
+    return () => {
+      window.removeEventListener('storage', handleStorageChange);
+      window.removeEventListener('auth-error', () => {});
     };
-
-    wsService.on('error', handleAuthError);
-    return () => wsService.off('error', handleAuthError);
   }, [navigate, location.pathname]);
 
   const login = async (email: string, password: string) => {
+    setLoading(true);
+    setError(null);
+    
     try {
-      setLoading(true);
-      setError(null);
+      logger.debug('Attempting login');
+      const { user, token } = await authService.login({ email, password });
+      setUser(user);
       
-      // First get the login response
-      const response = await authService.login({ email, password });
-      
-      if (!response.token || !response.user) {
-        setError('Invalid response from server');
-        return;
+      // Initialize services after successful login
+      try {
+        await initializeServices();
+        logger.debug('Services initialized after login');
+      } catch (serviceError) {
+        logger.error('Failed to initialize services after login:', serviceError);
+        // Continue even if service initialization fails
       }
       
-      // Set token first
-      authService.setToken(response.token);
+      // Connect to WebSocket with the new token
+      try {
+        await wsService.connect(token);
+      } catch (wsError) {
+        logger.error('Failed to connect to WebSocket after login:', wsError);
+        // Don't fail login if WebSocket fails
+      }
       
-      // Set user state
-      setUser(response.user);
+      // Redirect to the intended page or dashboard
+      const from = location.state?.from?.pathname || '/';
+      navigate(from, { replace: true });
       
-      // Connect WebSocket with new token
-      wsService.connect();
-      
-      // Navigate to home
-      navigate('/', { replace: true });
+      logger.debug('Login successful, redirecting to:', from);
     } catch (error: any) {
-      const message = error?.response?.data?.message || 'Login failed. Please check your credentials.';
-      setError(message);
-      // Clear everything on error
-      authService.setToken(null);
-      wsService.disconnect();
-      setUser(null);
+      const errorMessage = error?.response?.data?.message || 'Login failed';
+      setError(errorMessage);
+      logger.error('Login failed:', error);
+      throw error;
     } finally {
       setLoading(false);
     }
   };
 
   const logout = async () => {
+    setLoading(true);
+    
     try {
-      setLoading(true);
       await authService.logout();
+      wsService.disconnect();
+      setUser(null);
+      navigate('/login');
     } catch (error) {
       logger.error('Logout failed:', error);
     } finally {
-      setError(null);
-      authService.setToken(null);
-      wsService.disconnect();
-      setUser(null);
-      navigate('/login', { replace: true });
       setLoading(false);
     }
   };
 
-  const register = async (email: string, password: string, name: string) => {
+  const register = async (name: string, email: string, password: string) => {
+    setLoading(true);
+    setError(null);
+    
     try {
-      setLoading(true);
-      setError(null);
-      const response = await authService.register({ email, password, name });
-      await handleAuthStateChange(response.token);
+      const { user, token } = await authService.register({ name, email, password });
+      setUser(user);
+      
+      // Connect to WebSocket with the new token
+      try {
+        await wsService.connect(token);
+      } catch (wsError) {
+        logger.error('Failed to connect to WebSocket after registration:', wsError);
+      }
+      
+      navigate('/');
     } catch (error: any) {
-      const message = error?.response?.data?.message || 'Registration failed. Please try again.';
-      setError(message);
+      const errorMessage = error?.response?.data?.message || 'Registration failed';
+      setError(errorMessage);
+      logger.error('Registration failed:', error);
       throw error;
     } finally {
       setLoading(false);
     }
   };
 
-  const changePassword = async (currentPassword: string, newPassword: string) => {
+  const changePassword = async (oldPassword: string, newPassword: string) => {
+    setLoading(true);
+    setError(null);
+    
     try {
-      setLoading(true);
-      setError(null);
-      await authService.changePassword(currentPassword, newPassword);
+      await authService.changePassword(oldPassword, newPassword);
     } catch (error: any) {
-      const message = error?.response?.data?.message || 'Failed to change password.';
-      setError(message);
+      const errorMessage = error?.response?.data?.message || 'Password change failed';
+      setError(errorMessage);
+      logger.error('Password change failed:', error);
       throw error;
     } finally {
       setLoading(false);
     }
+  };
+
+  const value = {
+    user,
+    loading,
+    error,
+    login,
+    logout,
+    register,
+    changePassword
   };
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isAuthenticated: !!user,
-        loading,
-        error,
-        login,
-        logout,
-        register,
-        changePassword,
-      }}
-    >
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );
+};
+
+export const useAuth = (): AuthContextType => {
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 }; 

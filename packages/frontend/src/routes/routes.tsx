@@ -4,14 +4,16 @@ import { Layout } from '../components/Layout';
 import { Home } from '../pages/Home';
 import { Dashboard } from '../pages/Dashboard';
 import { AIDashboard } from '../pages/AIDashboard';
-import Settings from '../pages/Settings';
+import { Settings } from '../pages/Settings';
 import { AISettings } from '../pages/AISettings';
-import ApiKeys from '../pages/ApiKeys';
-import CrudPages from '../pages/CrudPages';
-import { CrudPage } from '../pages/CrudPage';
+import { ApiKeys } from '../pages/ApiKeys';
+import { CrudPages } from '../pages/CrudPages';
+import CrudPage from '../pages/CrudPage';
 import { RequireAuth } from '../components/RequireAuth';
-import Login from '../pages/Login';
+import { Login } from '../pages/Login';
 import Register from '../pages/Register';
+import SystemStatus from '../pages/SystemStatus';
+import CrudPageItems from '../pages/CrudPageItems';
 
 const routes = [
   {

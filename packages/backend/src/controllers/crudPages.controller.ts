@@ -81,6 +81,7 @@ export class CrudPagesController {
     this.createData = this.createData.bind(this);
     this.getData = this.getData.bind(this);
     this.updateData = this.updateData.bind(this);
+    this.deleteData = this.deleteData.bind(this);
   }
 
   public async getPages(req: RequestWithUser, res: Response) {
@@ -114,11 +115,10 @@ export class CrudPagesController {
       });
       
       // Send WebSocket notification
-      this.wsService.sendToUser(req.user.id, {
+      this.wsService.sendToUser(req.user.id, 'ai:message', {
         id: uuidv4(),
         content: `Created new page: ${page.name}`,
         role: 'system',
-        type: 'notification',
         timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
@@ -146,11 +146,10 @@ export class CrudPagesController {
       const page = await this.service.updatePage(req.params.id, req.user.id, req.body);
       
       // Send WebSocket notification
-      this.wsService.sendToUser(req.user.id, {
+      this.wsService.sendToUser(req.user.id, 'ai:message', {
         id: uuidv4(),
         content: `Updated page: ${page.name}`,
         role: 'system',
-        type: 'notification',
         timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
@@ -178,11 +177,10 @@ export class CrudPagesController {
       await this.service.deletePage(req.params.id, req.user.id);
       
       // Send WebSocket notification
-      this.wsService.sendToUser(req.user.id, {
+      this.wsService.sendToUser(req.user.id, 'ai:message', {
         id: uuidv4(),
         content: `Deleted page`,
         role: 'system',
-        type: 'notification',
         timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
@@ -207,14 +205,14 @@ export class CrudPagesController {
 
   public async createData(req: RequestWithUser, res: Response) {
     try {
-      const data = await this.service.createData(req.params.id, req.user.id, req.body);
+      const pageId = req.params.pageId;
+      const data = await this.service.createData(pageId, req.user.id, req.body);
       
       // Send WebSocket notification
-      this.wsService.sendToUser(req.user.id, {
+      this.wsService.sendToUser(req.user.id, 'ai:message', {
         id: uuidv4(),
-        content: `Created new data entry`,
+        content: `Created new record in page ${pageId}`,
         role: 'system',
-        type: 'notification',
         timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
@@ -224,7 +222,7 @@ export class CrudPagesController {
             page: 'CRUD Pages',
             controller: 'CrudPagesController',
             action: 'createData',
-            details: { pageId: req.params.id, data }
+            details: { pageId, dataId: data.id }
           },
           timestamp: new Date().toISOString()
         }
@@ -249,14 +247,14 @@ export class CrudPagesController {
 
   public async updateData(req: RequestWithUser, res: Response) {
     try {
-      const data = await this.service.updateData(req.params.id, req.params.dataId, req.user.id, req.body);
+      const { pageId, id } = req.params;
+      const data = await this.service.updateData(pageId, id, req.user.id, req.body);
       
       // Send WebSocket notification
-      this.wsService.sendToUser(req.user.id, {
+      this.wsService.sendToUser(req.user.id, 'ai:message', {
         id: uuidv4(),
-        content: `Updated data entry`,
+        content: `Updated record in page ${pageId}`,
         role: 'system',
-        type: 'notification',
         timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
@@ -266,7 +264,7 @@ export class CrudPagesController {
             page: 'CRUD Pages',
             controller: 'CrudPagesController',
             action: 'updateData',
-            details: { pageId: req.params.id, dataId: req.params.dataId, data }
+            details: { pageId, dataId: id }
           },
           timestamp: new Date().toISOString()
         }
@@ -275,6 +273,38 @@ export class CrudPagesController {
       res.json(data);
     } catch (error) {
       logger.error('Failed to update data', { error });
+      throw error;
+    }
+  }
+
+  public async deleteData(req: RequestWithUser, res: Response) {
+    try {
+      const { pageId, id } = req.params;
+      await this.service.deleteData(pageId, id, req.user.id);
+      
+      // Send WebSocket notification
+      this.wsService.sendToUser(req.user.id, 'ai:message', {
+        id: uuidv4(),
+        content: `Deleted record from page ${pageId}`,
+        role: 'system',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          type: 'notification',
+          status: 'success',
+          category: 'crud',
+          source: {
+            page: 'CRUD Pages',
+            controller: 'CrudPagesController',
+            action: 'deleteData',
+            details: { pageId, dataId: id }
+          },
+          timestamp: new Date().toISOString()
+        }
+      });
+
+      res.status(204).send();
+    } catch (error) {
+      logger.error('Failed to delete data', { error });
       throw error;
     }
   }

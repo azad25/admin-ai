@@ -1,3 +1,11 @@
+import { jwtDecode, JwtPayload as BaseJwtPayload } from 'jwt-decode';
+import { logger } from '../utils/logger';
+
+// Extend the JwtPayload interface to include userId
+interface JwtPayload extends BaseJwtPayload {
+  userId?: string;
+}
+
 export class AuthService {
   private static instance: AuthService | null = null;
   private token: string | null = null;
@@ -34,5 +42,28 @@ export class AuthService {
   public logout(): void {
     this.token = null;
     localStorage.removeItem('auth_token');
+  }
+
+  public getUserId(): string | null {
+    const token = this.getToken();
+    if (!token) return null;
+    
+    try {
+      const decoded = jwtDecode<JwtPayload>(token);
+      return decoded?.userId || null;
+    } catch (error) {
+      logger.error('Failed to decode token:', error);
+      return null;
+    }
+  }
+
+  getUserIdFromToken(token: string): string | null {
+    try {
+      const decoded = jwtDecode<JwtPayload>(token);
+      return decoded?.userId || null;
+    } catch (error) {
+      logger.error('Failed to decode token', { error });
+      return null;
+    }
   }
 } 

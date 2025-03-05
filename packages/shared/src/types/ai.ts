@@ -1,6 +1,7 @@
 import { z } from 'zod';
+import { LLMProvider } from './common.js';
 
-export type LLMProvider = 'openai' | 'gemini' | 'anthropic';
+export type { LLMProvider };
 
 export interface AIProviderConfig {
   provider: LLMProvider;
@@ -11,6 +12,7 @@ export interface AIProviderConfig {
   availableModels?: string[];
   lastVerified?: Date;
   settings?: Record<string, any>;
+  userId?: string;
 }
 
 export interface AIMessageMetadata {
@@ -118,12 +120,25 @@ export interface AISettings {
 }
 
 export interface AIAnalysis {
-  type: 'performance' | 'security' | 'error' | 'usage';
-  severity: 'low' | 'medium' | 'high';
-  description: string;
-  recommendations: string[];
-  metadata: Record<string, any>;
-  timestamp: string;
+  performance: {
+    cpuAnalysis: {
+      status: string;
+      trend: 'up' | 'down' | 'stable';
+      recommendations: string[];
+    };
+    memoryAnalysis: {
+      status: string;
+      trend: 'up' | 'down' | 'stable';
+      recommendations: string[];
+    };
+    recommendations: string[];
+  };
+  trends: {
+    cpu: number[];
+    memory: number[];
+    requests: number[];
+    errors: number[];
+  };
 }
 
 export interface AIAnalysisResult {
@@ -171,4 +186,4 @@ export interface RequestMetric {
     city: string;
   };
   duration: number;
-} 
+}

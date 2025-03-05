@@ -32,6 +32,15 @@ export class SystemMetrics {
   @Column('integer')
   warningCount!: number;
 
+  @Column('varchar', { nullable: true })
+  type!: string;
+
+  @Column('float', { nullable: true })
+  value!: number;
+
+  @Column('jsonb', { nullable: true })
+  metadata!: Record<string, any>;
+
   @CreateDateColumn()
   timestamp!: Date;
-} 
+}

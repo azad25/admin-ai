@@ -50,11 +50,62 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { systemMetricsService, SystemHealth, LogEntry, ErrorLogEntry, AuthLogEntry, RequestMetric } from '../services/systemMetrics.service';
+import { systemMetricsService, LogEntry, ErrorLogEntry, AuthLogEntry, RequestMetric } from '../services/systemMetrics.service';
 import { formatDistanceToNow } from 'date-fns';
 import { LiveRequestMap } from '../components/LiveRequestMap';
 import { useSnackbar } from '../contexts/SnackbarContext';
 import { crudPageService } from '../services/crudPages';
+import { authService } from '../services/auth';
+import { useAuth } from '../contexts/AuthContext';
+
+// Combined health interface to handle both old and new formats
+interface SystemHealth {
+  // New format
+  timestamp?: string;
+  score?: number;
+  status?: string;
+  services?: {
+    [key: string]: {
+      status: 'up' | 'down' | 'degraded';
+      lastCheck: string;
+      message?: string;
+    };
+  };
+  resources?: {
+    cpu?: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+    memory?: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+    disk?: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+  };
+  
+  // Old format
+  uptime?: number;
+  cpu?: {
+    usage: number;
+    cores: number;
+    model: string;
+    speed: number;
+  };
+  memory?: {
+    total: number;
+    free: number;
+    usage: number;
+  };
+  database?: {
+    status: string;
+    active_connections: number;
+    db_size: number;
+    table_count: number;
+  };
+}
 
 interface CrudItem {
   id: string;
@@ -76,6 +127,7 @@ export const Dashboard: React.FC = () => {
   const [requestMetrics, setRequestMetrics] = useState<RequestMetric[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const { user } = useAuth();
 
   // CRUD state
   const [items, setItems] = useState<CrudItem[]>([]);
@@ -89,6 +141,13 @@ export const Dashboard: React.FC = () => {
     try {
       setLoading(true);
       setError(null);
+      
+      // Check if user is authenticated
+      if (!user) {
+        setError('User not authenticated');
+        setLoading(false);
+        return;
+      }
       
       // Batch API calls with a single request
       const [
@@ -314,10 +373,15 @@ export const Dashboard: React.FC = () => {
             <CardContent>
               <Box display="flex" justifyContent="space-between" alignItems="center">
                 <Typography variant="h6">System Status</Typography>
-                {health && getStatusIcon(health.status)}
+                {health && getStatusIcon(health.status || 
+                  (health.score >= 80 ? 'healthy' : health.score >= 60 ? 'degraded' : 'critical'))}
               </Box>
               <Typography variant="body2" color="text.secondary">
-                Uptime: {health?.uptime ? formatDistanceToNow(Date.now() - (health.uptime * 1000)) : 'N/A'}
+                Uptime: {health?.uptime 
+                  ? formatDistanceToNow(Date.now() - (health.uptime * 1000)) 
+                  : health?.timestamp 
+                    ? formatDistanceToNow(new Date(health.timestamp)) 
+                    : 'N/A'}
               </Typography>
             </CardContent>
           </Card>
@@ -327,9 +391,19 @@ export const Dashboard: React.FC = () => {
           <Card>
             <CardContent>
               <Typography variant="h6">CPU Usage</Typography>
-              <Typography variant="h4">{health?.cpu.usage.toFixed(2)}%</Typography>
+              <Typography variant="h4">
+                {health?.resources?.cpu?.usage 
+                  ? (health.resources.cpu.usage * 100).toFixed(2) 
+                  : health?.cpu?.usage?.toFixed(2)}%
+              </Typography>
               <Typography variant="body2" color="text.secondary">
-                {health?.cpu.cores} Cores | {health?.cpu.model}
+                {health?.cpu?.cores 
+                  ? `${health.cpu.cores} Cores | ${health.cpu.model}` 
+                  : health?.resources?.cpu?.status === 'normal' 
+                    ? 'Status: Normal' 
+                    : health?.resources?.cpu?.status === 'warning' 
+                      ? 'Status: Warning' 
+                      : 'Status: Critical'}
               </Typography>
             </CardContent>
           </Card>
@@ -339,9 +413,19 @@ export const Dashboard: React.FC = () => {
           <Card>
             <CardContent>
               <Typography variant="h6">Memory</Typography>
-              <Typography variant="h4">{health?.memory.usage.toFixed(2)}%</Typography>
+              <Typography variant="h4">
+                {health?.resources?.memory?.usage 
+                  ? (health.resources.memory.usage * 100).toFixed(2) 
+                  : health?.memory?.usage?.toFixed(2)}%
+              </Typography>
               <Typography variant="body2" color="text.secondary">
-                {health?.memory.free && formatBytes(health.memory.free)} Free
+                {health?.memory?.free 
+                  ? `${formatBytes(health.memory.free)} Free` 
+                  : health?.resources?.memory?.status === 'normal' 
+                    ? 'Status: Normal' 
+                    : health?.resources?.memory?.status === 'warning' 
+                      ? 'Status: Warning' 
+                      : 'Status: Critical'}
               </Typography>
             </CardContent>
           </Card>
@@ -353,13 +437,15 @@ export const Dashboard: React.FC = () => {
               <Typography variant="h6">Database</Typography>
               <Box display="flex" alignItems="center" gap={1}>
                 <Chip
-                  label={health?.database.status || 'Unknown'}
-                  color={health?.database.status === 'connected' ? 'success' : 'error'}
+                  label={health?.database?.status || health?.services?.database?.status || 'Unknown'}
+                  color={(health?.database?.status === 'connected' || health?.services?.database?.status === 'up') ? 'success' : 'error'}
                   size="small"
                 />
               </Box>
               <Typography variant="body2" color="text.secondary">
-                {health?.database.active_connections || 0} Active Connections
+                {health?.database?.active_connections 
+                  ? `${health.database.active_connections} Active Connections` 
+                  : health?.services?.database?.message || 'Status information unavailable'}
               </Typography>
             </CardContent>
           </Card>
@@ -528,10 +614,10 @@ export const Dashboard: React.FC = () => {
                       <TableRow key={index}>
                         <TableCell>{formatDate(log.timestamp)}</TableCell>
                         <TableCell>
-                          <Tooltip title={log.stack || ''}>
+                          <Tooltip title={log.error && typeof log.error === 'object' && log.error.stack ? log.error.stack : ''}>
                             <Box>
                               <Typography variant="body2" color="error">
-                                {log.error}
+                                {typeof log.error === 'object' ? log.error.message : log.error}
                               </Typography>
                               {log.metadata && (
                                 <Typography variant="caption" color="text.secondary">
@@ -583,8 +669,8 @@ export const Dashboard: React.FC = () => {
                           />
                         </TableCell>
                         <TableCell>
-                          <Tooltip title={`IP: ${log.ip}`}>
-                            <Typography variant="body2">{log.userId}</Typography>
+                          <Tooltip title={`User: ${log.user?.email || 'Unknown'}`}>
+                            <Typography variant="body2">{log.user?.id || 'Unknown'}</Typography>
                           </Tooltip>
                         </TableCell>
                         <TableCell>

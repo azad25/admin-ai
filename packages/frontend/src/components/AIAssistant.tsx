@@ -2,8 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { styled } from '@mui/material/styles';
 import { Box, Paper, IconButton, Typography } from '@mui/material';
-import CloseIcon from '@mui/icons-material/Close';
-import { AIMessage } from '@admin-ai/shared/src/types/ai';
+import { Close as CloseIcon } from '@mui/icons-material';
+import { AIMessage } from '@admin-ai/shared/types/ai';
 
 const AssistantPanel = styled(motion(Paper))(({ theme }) => ({
   position: 'fixed',
@@ -118,12 +118,14 @@ export const AIAssistant: React.FC<AIAssistantProps> = ({ messages, isLoading, o
               <MessageBubble
                 key={message.id || index}
                 isAI={message.role === 'assistant'}
-                component={motion.div}
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: index * 0.1 }}
               >
-                <Typography>{message.content}</Typography>
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: index * 0.1 }}
+                >
+                  <Typography>{message.content}</Typography>
+                </motion.div>
               </MessageBubble>
             ))}
 

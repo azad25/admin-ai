@@ -1,34 +1,61 @@
 import api from './api';
 
+// Define the SystemHealth interface locally since the shared type might not be available
 export interface SystemHealth {
-  status: string;
-  uptime: number;
-  cpu: {
+  // New format
+  timestamp?: string;
+  score?: number;
+  status?: string;
+  services?: {
+    [key: string]: {
+      status: 'up' | 'down' | 'degraded';
+      lastCheck: string;
+      message?: string;
+    };
+  };
+  resources?: {
+    cpu?: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+    memory?: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+    disk?: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+  };
+  
+  // Old format
+  uptime?: number;
+  cpu?: {
     usage: number;
     cores: number;
     model: string;
     speed: number;
   };
-  memory: {
+  memory?: {
     total: number;
     free: number;
     usage: number;
   };
-  os: {
+  os?: {
     platform: string;
     release: string;
     type: string;
     arch: string;
     hostname: string;
   };
-  network: Record<string, Array<{
+  network?: Record<string, Array<{
     address: string;
     netmask: string;
     family: string;
     mac: string;
     internal: boolean;
   }>>;
-  database: {
+  database?: {
     status: string;
     active_connections: number;
     db_size: number;
@@ -101,17 +128,17 @@ export class SystemMetricsService {
   }
 
   async getRecentLogs(): Promise<LogEntry[]> {
-    const response = await api.get('/metrics/logs');
+    const response = await api.get('/metrics/logs/recent');
     return response.data;
   }
 
   async getErrorLogs(): Promise<ErrorLogEntry[]> {
-    const response = await api.get('/metrics/errors');
+    const response = await api.get('/metrics/logs/errors');
     return response.data;
   }
 
   async getAuthLogs(): Promise<AuthLogEntry[]> {
-    const response = await api.get('/metrics/auth');
+    const response = await api.get('/metrics/logs/auth');
     return response.data;
   }
 

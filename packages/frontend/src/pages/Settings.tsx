@@ -17,7 +17,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useSnackbar } from '../contexts/SnackbarContext';
 import MonitorHeartIcon from '@mui/icons-material/MonitorHeart';
 
-export default function Settings() {
+export const Settings: React.FC = () => {
   const [oldPassword, setOldPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -130,4 +130,4 @@ export default function Settings() {
       </Grid>
     </Box>
   );
-} 
+}; 

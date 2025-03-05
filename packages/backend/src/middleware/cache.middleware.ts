@@ -5,8 +5,8 @@ import { RequestWithUser } from '../types/express';
 
 interface CacheOptions {
   ttl?: number;
-  key?: string | ((req: Request & Partial<RequestWithUser>) => string);
-  condition?: (req: Request & Partial<RequestWithUser>) => boolean;
+  key?: string | ((req: Request) => string);
+  condition?: (req: Request) => boolean;
 }
 
 export const cacheMiddleware = (options: CacheOptions = {}) => {
@@ -17,7 +17,7 @@ export const cacheMiddleware = (options: CacheOptions = {}) => {
     key = (req: Request) => `${req.method}:${req.originalUrl}:${JSON.stringify(req.body)}`,
   } = options;
 
-  return async (req: Request & Partial<RequestWithUser>, res: Response, next: NextFunction) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
     if (!cache.isReady()) {
       logger.warn('Cache service not ready, skipping cache middleware');
       return next();

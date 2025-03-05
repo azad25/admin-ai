@@ -3,13 +3,14 @@ import { EventEmitter } from 'events';
 import { WebSocketService } from './websocket.service';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 
 interface LogEntry {
   timestamp: string;
   level: string;
   category: string;
   message: string;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
 }
 
 export class LoggingService extends EventEmitter {
@@ -53,7 +54,7 @@ export class LoggingService extends EventEmitter {
     type: string;
     userId?: string;
     message: string;
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
   }): Promise<void> {
     const logEntry: LogEntry = {
       timestamp: new Date().toISOString(),
@@ -75,9 +76,19 @@ export class LoggingService extends EventEmitter {
 
     // Send to WebSocket if user-specific
     if (event.userId && this.wsService) {
-      this.wsService.sendToUser(event.userId, {
-        type: 'ai_log',
-        data: logEntry
+      this.wsService.sendToUser(event.userId, 'activity:log', {
+        type: 'activity',
+        data: {
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          level: 'info',
+          message: event.message,
+          metadata: {
+            userId: event.userId,
+            source: event.type,
+            details: event.metadata
+          }
+        }
       });
     }
   }
@@ -85,7 +96,7 @@ export class LoggingService extends EventEmitter {
   public async logError(error: Error, context?: {
     userId?: string;
     category?: string;
-    metadata?: Record<string, any>;
+    metadata?: Record<string, unknown>;
   }): Promise<void> {
     const logEntry: LogEntry = {
       timestamp: new Date().toISOString(),
@@ -111,9 +122,22 @@ export class LoggingService extends EventEmitter {
 
     // Send to WebSocket if user-specific
     if (context?.userId && this.wsService) {
-      this.wsService.sendToUser(context.userId, {
-        type: 'error_log',
-        data: logEntry
+      this.wsService.sendToUser(context.userId, 'error:log', {
+        type: 'error',
+        data: {
+          id: crypto.randomUUID(),
+          timestamp: new Date().toISOString(),
+          level: 'error',
+          message: error.message,
+          metadata: {
+            userId: context.userId,
+            source: context.category,
+            details: {
+              stack: error.stack,
+              ...context
+            }
+          }
+        }
       });
     }
   }
@@ -182,4 +206,4 @@ export class LoggingService extends EventEmitter {
       logger.error('Failed to clean old logs:', error);
     }
   }
-} 
+}

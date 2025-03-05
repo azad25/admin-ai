@@ -5,11 +5,13 @@ import { ApiKey } from '../database/entities/ApiKey';
 import { AppError } from '../middleware/errorHandler';
 import { systemMetricsService } from '../services/systemMetrics.service';
 import { WebSocketService } from '../services/websocket.service';
+import { RequestWithUser } from '../types/express';
+import crypto from 'crypto';
 
 const apiKeyRepository = AppDataSource.getRepository(ApiKey);
 
 export const apiKeysController = {
-  async getAll(req: Request, res: Response) {
+  async getAll(req: RequestWithUser, res: Response) {
     try {
       const apiKeys = await apiKeyRepository.find({
         where: { userId: req.user.id },
@@ -18,10 +20,11 @@ export const apiKeysController = {
 
       // Send notification for successful fetch
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Successfully retrieved ${apiKeys.length} API keys`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'success',
@@ -31,7 +34,7 @@ export const apiKeysController = {
             controller: 'ApiKeysController',
             action: 'getAll'
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -40,10 +43,11 @@ export const apiKeysController = {
     } catch (error) {
       // Send error notification
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Failed to retrieve API keys: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'error',
@@ -53,7 +57,7 @@ export const apiKeysController = {
             controller: 'ApiKeysController',
             action: 'getAll'
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -62,9 +66,9 @@ export const apiKeysController = {
     }
   },
 
-  async create(req: Request, res: Response) {
+  async create(req: RequestWithUser, res: Response) {
     try {
-      const { name } = req.body;
+      const { name, expiresAt, permissions } = req.body;
 
       if (!name) {
         throw new AppError(400, 'Name is required');
@@ -75,14 +79,17 @@ export const apiKeysController = {
         name,
         key,
         userId: req.user.id,
+        expiresAt,
+        permissions,
       });
 
       // Send notification for successful creation
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: `Created new API key: ${name}`,
+        content: `Successfully created API key: ${apiKey.name}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'success',
@@ -91,9 +98,9 @@ export const apiKeysController = {
             page: 'API Keys',
             controller: 'ApiKeysController',
             action: 'create',
-            details: { keyId: apiKey.id, name: apiKey.name }
+            details: { name }
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -102,10 +109,11 @@ export const apiKeysController = {
     } catch (error) {
       // Send error notification
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Failed to create API key: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'error',
@@ -115,7 +123,7 @@ export const apiKeysController = {
             controller: 'ApiKeysController',
             action: 'create'
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -125,10 +133,10 @@ export const apiKeysController = {
     }
   },
 
-  async update(req: Request, res: Response) {
+  async update(req: RequestWithUser, res: Response) {
     try {
       const { id } = req.params;
-      const { name } = req.body;
+      const { name, expiresAt, permissions, isActive } = req.body;
 
       if (!name) {
         throw new AppError(400, 'Name is required');
@@ -143,14 +151,18 @@ export const apiKeysController = {
       }
 
       apiKey.name = name;
+      apiKey.expiresAt = expiresAt;
+      apiKey.permissions = permissions;
+      apiKey.isActive = isActive;
       await apiKeyRepository.save(apiKey);
 
       // Send notification for successful update
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: `Updated API key: ${name}`,
+        content: `Successfully updated API key: ${apiKey.name}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'success',
@@ -159,9 +171,9 @@ export const apiKeysController = {
             page: 'API Keys',
             controller: 'ApiKeysController',
             action: 'update',
-            details: { keyId: apiKey.id, name: apiKey.name }
+            details: { name }
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -170,10 +182,11 @@ export const apiKeysController = {
     } catch (error) {
       // Send error notification
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Failed to update API key: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'error',
@@ -183,7 +196,7 @@ export const apiKeysController = {
             controller: 'ApiKeysController',
             action: 'update'
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -193,7 +206,7 @@ export const apiKeysController = {
     }
   },
 
-  async delete(req: Request, res: Response) {
+  async delete(req: RequestWithUser, res: Response) {
     try {
       const { id } = req.params;
 
@@ -209,10 +222,11 @@ export const apiKeysController = {
 
       // Send notification for successful deletion
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
-        content: `Deleted API key: ${apiKey.name}`,
+        content: `Successfully deleted API key: ${apiKey.name}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'success',
@@ -221,9 +235,9 @@ export const apiKeysController = {
             page: 'API Keys',
             controller: 'ApiKeysController',
             action: 'delete',
-            details: { keyId: id, name: apiKey.name }
+            details: { name: apiKey.name }
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -232,10 +246,11 @@ export const apiKeysController = {
     } catch (error) {
       // Send error notification
       const wsService: WebSocketService = req.app.get('wsService');
-      wsService.sendToUser(req.user.id, {
+      wsService.sendToUser(req.user.id, 'ai:message', {
         id: crypto.randomUUID(),
         content: `Failed to delete API key: ${error instanceof Error ? error.message : 'Unknown error'}`,
         role: 'system',
+        timestamp: new Date().toISOString(),
         metadata: {
           type: 'notification',
           status: 'error',
@@ -245,7 +260,7 @@ export const apiKeysController = {
             controller: 'ApiKeysController',
             action: 'delete'
           },
-          timestamp: Date.now(),
+          timestamp: new Date().toISOString(),
           read: false
         }
       });
@@ -255,7 +270,7 @@ export const apiKeysController = {
     }
   },
 
-  async regenerate(req: Request, res: Response) {
+  async regenerate(req: RequestWithUser, res: Response) {
     const { id } = req.params;
 
     const apiKey = await apiKeyRepository.findOne({

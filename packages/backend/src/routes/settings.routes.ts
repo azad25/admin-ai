@@ -6,6 +6,9 @@ import { asyncHandler } from '../utils/asyncHandler';
 export function createSettingsRoutes(wsService: WebSocketService) {
   const router = Router();
 
+  // AI settings route
+  router.get('/ai', asyncHandler(aiSettingsController.getAISettings));
+
   // Provider settings routes
   router.get('/providers/:provider', asyncHandler(aiSettingsController.getProviderSettings));
   router.get('/providers/:provider/key', asyncHandler(aiSettingsController.getDecryptedApiKey));

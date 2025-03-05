@@ -1,9 +1,11 @@
 import { Request, Response, NextFunction } from 'express';
 import { queueService } from '../services/queue.service';
 import { kafkaService } from '../services/kafka.service';
-import { cacheService } from '../services/cache.service';
+import { CacheService } from '../services/cache.service';
 import { logger } from '../utils/logger';
 import crypto from 'crypto';
+
+const cacheService = CacheService.getInstance();
 
 interface QueuedRequest {
   id: string;
@@ -60,7 +62,7 @@ export const requestQueueMiddleware = {
     // Process CRUD requests
     await queueService.processQueue(REQUEST_QUEUES.crud, async (job) => {
       const { id, method, path, body, userId } = job.data as QueuedRequest;
-      await kafkaService.sendMessage('request-events', {
+      await kafkaService.publish('request-events', {
         type: 'request-processing',
         requestId: id,
         method,
@@ -73,7 +75,7 @@ export const requestQueueMiddleware = {
     // Process AI requests
     await queueService.processQueue(REQUEST_QUEUES.ai, async (job) => {
       const { id, method, path, body, userId } = job.data as QueuedRequest;
-      await kafkaService.sendMessage('ai-events', {
+      await kafkaService.publish('ai-events', {
         type: 'ai-request-processing',
         requestId: id,
         method,
@@ -86,7 +88,7 @@ export const requestQueueMiddleware = {
     // Process Auth requests
     await queueService.processQueue(REQUEST_QUEUES.auth, async (job) => {
       const { id, method, path, body, userId } = job.data as QueuedRequest;
-      await kafkaService.sendMessage('auth-events', {
+      await kafkaService.publish('auth-events', {
         type: 'auth-request-processing',
         requestId: id,
         method,
@@ -99,7 +101,7 @@ export const requestQueueMiddleware = {
     // Process Metrics requests
     await queueService.processQueue(REQUEST_QUEUES.metrics, async (job) => {
       const { id, method, path, body, userId } = job.data as QueuedRequest;
-      await kafkaService.sendMessage('metrics-events', {
+      await kafkaService.publish('metrics-events', {
         type: 'metrics-request-processing',
         requestId: id,
         method,
@@ -151,7 +153,7 @@ export const requestQueueMiddleware = {
       });
 
       // Emit event to Kafka
-      await kafkaService.sendMessage('request-events', {
+      await kafkaService.publish('request-events', {
         type: 'request_started',
         jobId: requestId,
         data: {

@@ -56,7 +56,7 @@ export class ErrorMonitor extends EventEmitter {
     });
   }
 
-  public handleError(type: string, error: Error | any, metadata?: Record<string, any>): void {
+  public handleError(type: string, error: Error | unknown, metadata?: Record<string, unknown>): void {
     if (!this.isMonitoring) {
       return;
     }
@@ -94,15 +94,15 @@ export class ErrorMonitor extends EventEmitter {
     }
   }
 
-  private isCriticalError(type: string, error: any): boolean {
+  private isCriticalError(type: string, error: unknown): boolean {
     // Define conditions for critical frontend errors
     const criticalConditions = [
       type === 'uncaught_error',
       type === 'react_error',
-      error.fatal === true,
-      error.message?.includes('ChunkLoadError'),
-      error.message?.includes('NetworkError'),
-      error.message?.includes('QuotaExceededError')
+      (error as { fatal?: boolean })?.fatal === true,
+      (error as { message?: string })?.message?.includes('ChunkLoadError'),
+      (error as { message?: string })?.message?.includes('NetworkError'),
+      (error as { message?: string })?.message?.includes('QuotaExceededError')
     ];
 
     return criticalConditions.some(condition => condition);
@@ -162,4 +162,4 @@ export class ErrorMonitor extends EventEmitter {
     this.errorLogs = [];
     console.info('Frontend error logs cleared');
   }
-} 
+}

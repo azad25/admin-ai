@@ -3,7 +3,7 @@ import axios from 'axios';
 
 export class HealthCheck extends EventEmitter {
   private checkInterval: number | null = null;
-  private services: Map<string, any> = new Map();
+  private services: Map<string, unknown> = new Map();
   private healthyServices: Set<string> = new Set();
   private readonly CHECK_INTERVAL = 30000; // 30 seconds
 
@@ -11,7 +11,7 @@ export class HealthCheck extends EventEmitter {
     super();
   }
 
-  public async start(services: Map<string, any>): Promise<void> {
+  public async start(services: Map<string, unknown>): Promise<void> {
     this.services = services;
     await this.performHealthCheck();
     this.checkInterval = window.setInterval(() => this.performHealthCheck(), this.CHECK_INTERVAL);
@@ -45,15 +45,15 @@ export class HealthCheck extends EventEmitter {
     }
   }
 
-  private async checkServiceHealth(serviceName: string, service: any): Promise<boolean> {
+  private async checkServiceHealth(serviceName: string, service: unknown): Promise<boolean> {
     try {
       switch (serviceName) {
         case 'api':
-          return await this.checkAPIHealth(service);
+          return await this.checkAPIHealth(this.isAPIService(service) ? service : null);
         case 'websocket':
-          return this.checkWebSocketHealth(service);
+          return this.checkWebSocketHealth(this.isWebSocketService(service) ? service : null);
         default:
-          return await this.checkGenericServiceHealth(service);
+          return await this.checkGenericServiceHealth(this.isGenericService(service) ? service : null);
       }
     } catch (error) {
       console.error(`Health check failed for frontend service ${serviceName}`, error);
@@ -61,8 +61,21 @@ export class HealthCheck extends EventEmitter {
     }
   }
 
-  private async checkAPIHealth(apiService: any): Promise<boolean> {
+  private isAPIService(service: unknown): service is { baseURL: string } {
+    return !!service && typeof (service as { baseURL: string }).baseURL === 'string';
+  }
+
+  private isWebSocketService(service: unknown): service is WebSocket {
+    return !!service && service instanceof WebSocket;
+  }
+
+  private isGenericService(service: unknown): service is { healthCheck?: () => Promise<boolean> } {
+    return !!service && typeof (service as { healthCheck?: () => Promise<boolean> }).healthCheck === 'function';
+  }
+
+  private async checkAPIHealth(apiService: { baseURL: string } | null): Promise<boolean> {
     try {
+      if (!apiService) return false;
       const response = await axios.get(`${apiService.baseURL}/health`);
       return response.status === 200;
     } catch {
@@ -70,14 +83,14 @@ export class HealthCheck extends EventEmitter {
     }
   }
 
-  private checkWebSocketHealth(ws: WebSocket): boolean {
-    return ws.readyState === WebSocket.OPEN;
+  private checkWebSocketHealth(ws: WebSocket | null): boolean {
+    return !!ws && ws.readyState === WebSocket.OPEN;
   }
 
-  private async checkGenericServiceHealth(service: any): Promise<boolean> {
-    return service && 
+  private async checkGenericServiceHealth(service: { healthCheck?: () => Promise<boolean> } | null): Promise<boolean> {
+    return !!service && 
            typeof service.healthCheck === 'function' && 
            await service.healthCheck()
            .catch(() => false);
   }
-} 
+}

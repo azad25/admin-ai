@@ -75,6 +75,10 @@ export const ErrorAnalysis: React.FC<ErrorAnalysisProps> = ({ title, data, icon 
   }
 
   const renderContent = () => {
+    if (!data) {
+      return <Typography color="text.secondary">No data available</Typography>;
+    }
+    
     if ('cpu' in data) {
       // Performance Insights
       return (
@@ -142,7 +146,7 @@ export const ErrorAnalysis: React.FC<ErrorAnalysisProps> = ({ title, data, icon 
               secondary={data.suspiciousActivities}
             />
           </ListItem>
-          {data.vulnerabilities.map((vuln, index) => (
+          {data.vulnerabilities && data.vulnerabilities.map((vuln, index) => (
             <ListItem key={index}>
               <ListItemText
                 primary={vuln.type}
@@ -161,30 +165,36 @@ export const ErrorAnalysis: React.FC<ErrorAnalysisProps> = ({ title, data, icon 
           ))}
         </>
       );
-    } else {
+    } else if (data.daily && typeof data.daily === 'object') {
       // Usage Insights
       return (
         <>
           <ListItem>
             <ListItemText
               primary="Daily Stats"
-              secondary={`${data.daily.requests} requests • ${data.daily.uniqueUsers} users • Peak hour: ${data.daily.peakHour}:00`}
+              secondary={`${data.daily.requests || 0} requests • ${data.daily.uniqueUsers || 0} users • Peak hour: ${data.daily.peakHour || 'N/A'}`}
             />
           </ListItem>
-          <ListItem>
-            <ListItemText
-              primary="Weekly Overview"
-              secondary={`Trend: ${data.weekly.trend} • Average Load: ${data.weekly.averageLoad}`}
-            />
-          </ListItem>
-          <ListItem>
-            <ListItemText
-              primary="Monthly Growth"
-              secondary={`${data.monthly.growth}% growth • ${data.monthly.forecast}% forecast`}
-            />
-          </ListItem>
+          {data.weekly && (
+            <ListItem>
+              <ListItemText
+                primary="Weekly Overview"
+                secondary={`Trend: ${data.weekly.trend || 'N/A'} • Average Load: ${data.weekly.averageLoad || 0}`}
+              />
+            </ListItem>
+          )}
+          {data.monthly && (
+            <ListItem>
+              <ListItemText
+                primary="Monthly Growth"
+                secondary={`${data.monthly.growth || 0}% growth • ${data.monthly.forecast || 0}% forecast`}
+              />
+            </ListItem>
+          )}
         </>
       );
+    } else {
+      return <Typography color="text.secondary">Unknown data format</Typography>;
     }
   };
 

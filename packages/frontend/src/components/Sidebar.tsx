@@ -17,18 +17,28 @@ import {
   Storage as StorageIcon,
   Psychology as AIIcon,
   Key as KeyIcon,
+  SettingsInputComponent as SettingsInputComponentIcon,
 } from '@mui/icons-material';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
+
+// Define a type for menu items
+interface MenuItem {
+  text: string;
+  icon: React.ReactNode;
+  path: string;
+}
 
 const drawerWidth = 240;
 
-const menuItems = [
-  { text: 'Home', icon: <HomeIcon />, path: '/' },
+const menuItems: MenuItem[] = [
+  { text: 'Home', icon: <HomeIcon />, path: '/home' },
   { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
-  { text: 'AI Dashboard', icon: <AIIcon />, path: '/ai-dashboard' },
+  { text: 'AI Dashboard', icon: <AIIcon />, path: '/ai' },
   { text: 'API Keys', icon: <KeyIcon />, path: '/api-keys' },
-  { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud-pages' },
+  { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud' },
   { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
+  { text: 'WebSocket Test', icon: <SettingsInputComponentIcon />, path: '/websocket-test' },
 ];
 
 export const Sidebar: React.FC = () => {
@@ -98,6 +108,42 @@ export const Sidebar: React.FC = () => {
             />
           </ListItem>
         ))}
+        <ListItem
+          button
+          onClick={() => navigate('/websocket-test')}
+          sx={{
+            '&.Mui-selected': {
+              backgroundColor: theme.palette.action.selected,
+              '&:hover': {
+                backgroundColor: theme.palette.action.selected,
+              },
+            },
+            '&:hover': {
+              backgroundColor: theme.palette.action.hover,
+            },
+          }}
+        >
+          <ListItemIcon
+            sx={{
+              color: location.pathname === '/websocket-test'
+                ? theme.palette.primary.main
+                : theme.palette.text.secondary,
+            }}
+          >
+            <SettingsIcon />
+          </ListItemIcon>
+          <ListItemText
+            primary="WebSocket Test"
+            sx={{
+              '& .MuiTypography-root': {
+                color: location.pathname === '/websocket-test'
+                  ? theme.palette.primary.main
+                  : theme.palette.text.primary,
+                fontWeight: location.pathname === '/websocket-test' ? 600 : 400,
+              },
+            }}
+          />
+        </ListItem>
       </List>
     </Drawer>
   );

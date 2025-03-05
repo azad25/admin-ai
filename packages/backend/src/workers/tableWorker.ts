@@ -1,10 +1,10 @@
-import { Job } from 'bull';
 import { logger } from '../utils/logger';
-import { queueService } from '../services/queue.service';
-import { dynamicCrudService } from '../services/dynamicCrud.service';
 import { kafkaService } from '../services/kafka.service';
+import { CacheService } from '../services/cache.service';
+import { dynamicCrudService } from '../services/dynamicCrud.service';
 import { CrudPage } from '../database/entities/CrudPage';
-import { KafkaMessage } from '../services/kafka.service';
+
+const cacheService = CacheService.getInstance();
 
 interface CrudPageSchema {
   fields: Array<{
@@ -21,154 +21,99 @@ interface TypedCrudPage extends Omit<CrudPage, 'schema'> {
   schema: CrudPageSchema;
 }
 
-interface TableJobData {
-  page: TypedCrudPage;
-  userId: string;
-}
+export const tableWorker = {
+  async initialize() {
+    try {
+      await kafkaService.connect();
+      await kafkaService.subscribe('table-tasks', 'table-worker', this.handleTableTask.bind(this));
+      logger.info('Table worker initialized');
+    } catch (error) {
+      logger.error('Failed to initialize table worker:', error);
+      throw error;
+    }
+  },
 
-async function processTableCreation(job: Job<TableJobData>) {
-  const { page, userId } = job.data;
+  async handleTableTask(message: any) {
+    const { type, userId, data } = message;
 
-  try {
-    logger.info(`Creating table for page ${page.id}`);
-    await dynamicCrudService.createTable(page);
+    try {
+      switch (type) {
+        case 'create_table':
+          await this.createTable(data, userId);
+          break;
+        case 'update_table':
+          await this.updateTable(data, userId);
+          break;
+        case 'delete_table':
+          await this.deleteTable(data, userId);
+          break;
+        default:
+          logger.warn(`Unknown table task type: ${type}`);
+      }
+    } catch (error) {
+      logger.error(`Error processing table task ${type}:`, error);
+      if (error instanceof Error) {
+        await kafkaService.publish('table-events', {
+          type: 'task_failed',
+          userId,
+          data: {
+            taskName: type,
+            error: error.message
+          },
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+  },
 
-    // Emit success event
-    await kafkaService.sendMessage('table-events', {
+  async createTable(data: TypedCrudPage, userId: string) {
+    const result = await dynamicCrudService.createTable(data);
+    await kafkaService.publish('table-events', {
       type: 'table_created',
       userId,
-      jobId: job.id.toString(),
-      pageId: page.id,
       data: {
-        tableName: page.schema.tableName,
-        schema: page.schema
-      },
-      metadata: {
-        timestamp: new Date().toISOString(),
-        source: {
-          controller: 'TableWorker',
-          action: 'createTable'
-        }
+        tableName: data.schema.tableName,
+        schema: data.schema
       },
       timestamp: new Date().toISOString()
-    } as KafkaMessage);
+    });
+  },
 
-    logger.info(`Table created successfully for page ${page.id}`);
-  } catch (error) {
-    logger.error(`Failed to create table for page ${page.id}:`, error);
-
-    // Emit failure event
-    await kafkaService.sendMessage('table-events', {
-      type: 'table_creation_failed',
+  async updateTable(data: TypedCrudPage, userId: string) {
+    const result = await dynamicCrudService.update(data, data.id, data.schema, userId);
+    await kafkaService.publish('table-events', {
+      type: 'table_updated',
       userId,
-      jobId: job.id.toString(),
-      pageId: page.id,
       data: {
-        error: error instanceof Error ? error.message : 'Unknown error'
-      },
-      metadata: {
-        timestamp: new Date().toISOString(),
-        source: {
-          controller: 'TableWorker',
-          action: 'createTable'
-        }
+        tableName: data.schema.tableName,
+        schema: data.schema
       },
       timestamp: new Date().toISOString()
-    } as KafkaMessage);
+    });
+  },
 
-    throw error;
-  }
-}
-
-async function processTableDeletion(job: Job<TableJobData>) {
-  const { page, userId } = job.data;
-
-  try {
-    logger.info(`Deleting table for page ${page.id}`);
-    await dynamicCrudService.dropTable(page);
-
-    // Emit success event
-    await kafkaService.sendMessage('table-events', {
+  async deleteTable(data: TypedCrudPage, userId: string) {
+    const result = await dynamicCrudService.dropTable(data);
+    await kafkaService.publish('table-events', {
       type: 'table_deleted',
       userId,
-      jobId: job.id.toString(),
-      pageId: page.id,
       data: {
-        tableName: page.schema.tableName
-      },
-      metadata: {
-        timestamp: new Date().toISOString(),
-        source: {
-          controller: 'TableWorker',
-          action: 'deleteTable'
-        }
+        tableName: data.schema.tableName
       },
       timestamp: new Date().toISOString()
-    } as KafkaMessage);
-
-    logger.info(`Table deleted successfully for page ${page.id}`);
-  } catch (error) {
-    logger.error(`Failed to delete table for page ${page.id}:`, error);
-
-    // Emit failure event
-    await kafkaService.sendMessage('table-events', {
-      type: 'table_deletion_failed',
-      userId,
-      jobId: job.id.toString(),
-      pageId: page.id,
-      data: {
-        error: error instanceof Error ? error.message : 'Unknown error'
-      },
-      metadata: {
-        timestamp: new Date().toISOString(),
-        source: {
-          controller: 'TableWorker',
-          action: 'deleteTable'
-        }
-      },
-      timestamp: new Date().toISOString()
-    } as KafkaMessage);
-
-    throw error;
+    });
   }
-}
-
-export async function startTableWorker() {
-  // Create queues
-  const tableCreationQueue = queueService.createQueue({
-    name: 'table-creation',
-    attempts: 3,
-    backoff: {
-      type: 'exponential',
-      delay: 1000,
-    },
-  });
-
-  const tableDeletionQueue = queueService.createQueue({
-    name: 'table-deletion',
-    attempts: 3,
-    backoff: {
-      type: 'exponential',
-      delay: 1000,
-    },
-  });
-
-  // Process jobs
-  await queueService.processQueue('table-creation', processTableCreation);
-  await queueService.processQueue('table-deletion', processTableDeletion);
-
-  logger.info('Table worker started successfully');
-}
+};
 
 // Handle worker shutdown
 process.on('SIGTERM', async () => {
   logger.info('Table worker shutting down');
-  await queueService.closeQueues();
+  await kafkaService.disconnect();
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
   logger.info('Table worker shutting down');
-  await queueService.closeQueues();
+  await kafkaService.disconnect();
   process.exit(0);
 }); 
