@@ -6,11 +6,13 @@ AdminAI is a modern, AI-powered administration dashboard that combines powerful 
 
 - 🤖 AI-powered system analysis and recommendations
 - 📊 Real-time monitoring and metrics visualization
-- 🔄 WebSocket-based live updates
+- 🔄 WebSocket-based real-time communication
 - 🎯 Customizable dashboard components
 - 🛠 Advanced system management tools
 - 🔒 Secure authentication and authorization
 - 📱 Responsive design for all devices
+- 🔍 Comprehensive metrics and insights
+- 🧠 Multiple AI provider integrations
 
 ## Tech Stack
 
@@ -18,15 +20,18 @@ AdminAI is a modern, AI-powered administration dashboard that combines powerful 
 - React with TypeScript
 - Vite for build tooling
 - Three.js for 3D visualizations
-- WebSocket for real-time updates
+- Socket.IO Client for WebSocket communication
 - Material-UI components
+- Redux for state management
 
 ### Backend
 - Node.js with TypeScript
+- Express.js for API endpoints
+- Socket.IO for WebSocket server
 - PostgreSQL database
-- Redis for caching
-- Kafka for event streaming
-- WebSocket server
+- Redis for caching and session management
+- Bull for job queues and background processing
+- TypeORM for database operations
 
 ## Project Structure
 
@@ -48,7 +53,6 @@ AdminAI is a modern, AI-powered administration dashboard that combines powerful 
 - Yarn package manager
 - PostgreSQL 14 or higher
 - Redis 6 or higher
-- Kafka (optional for event streaming)
 
 ### Installation
 
@@ -102,10 +106,39 @@ yarn build
 
 Detailed documentation is available in the [docs](./docs) directory:
 
-- [Architecture Overview](./docs/architecture.md)
-- [API Documentation](./docs/api.md)
-- [Development Guide](./docs/development.md)
-- [Deployment Guide](./docs/deployment.md)
+- [Architecture Overview](./docs/architecture.md) - Comprehensive documentation of the system architecture, including frontend and backend structures, communication patterns, data flows, security measures, and deployment options.
+  
+- [API Documentation](./docs/api.md) - Complete API reference including REST endpoints, WebSocket events, authentication methods, error handling, and rate limiting details.
+
+## Key Features
+
+### Real-time Communication
+
+AdminAI uses WebSockets to provide real-time updates and communication between the client and server. This enables:
+
+- Live system metrics updates
+- Real-time AI assistant interactions
+- Instant notifications and alerts
+- Collaborative features
+
+### AI Integration
+
+The platform integrates with multiple AI providers to offer:
+
+- System performance analysis and recommendations
+- Schema and CRUD generation
+- Dashboard widget suggestions
+- Natural language interactions
+
+### Comprehensive Monitoring
+
+AdminAI provides detailed monitoring capabilities:
+
+- System health metrics
+- Request analytics
+- Geographic data visualization
+- AI usage statistics
+- Performance and security insights
 
 ## Contributing
 
