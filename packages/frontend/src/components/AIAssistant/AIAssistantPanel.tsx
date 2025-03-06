@@ -7,9 +7,10 @@ import {
   Typography,
   Tabs,
   Tab,
-  CircularProgress
+  CircularProgress,
+  Avatar
 } from '@mui/material';
-import { Send as SendIcon } from '@mui/icons-material';
+import { Send as SendIcon, SmartToy as BotIcon } from '@mui/icons-material';
 import { useAIMessages } from '../../contexts/AIMessagesContext';
 import { AIMessageComponent } from '../AIMessage';
 import { logger } from '../../utils/logger';
@@ -26,6 +27,42 @@ import {
 } from './index';
 import { getWebSocketService } from '../../services/websocket.service';
 import { useAppSelector } from '../../hooks/redux';
+import { styled } from '@mui/material/styles';
+
+// Typing animation components
+const TypingContainer = styled(motion.div)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'flex-start',
+  marginBottom: theme.spacing(2),
+  marginLeft: theme.spacing(2),
+  width: 'calc(100% - 32px)',
+}));
+
+const AvatarContainer = styled(Box)({
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'center',
+  marginRight: '8px',
+});
+
+const TypingBubble = styled(motion.div)(({ theme }) => ({
+  display: 'flex',
+  alignItems: 'center',
+  padding: theme.spacing(1.5, 2),
+  backgroundColor: theme.palette.primary.light,
+  borderRadius: theme.spacing(2),
+  color: theme.palette.primary.contrastText,
+  maxWidth: '80%',
+  boxShadow: '0 1px 2px rgba(0,0,0,0.1)',
+}));
+
+const TypingDot = styled(motion.div)(({ theme }) => ({
+  width: 8,
+  height: 8,
+  margin: '0 2px',
+  borderRadius: '50%',
+  backgroundColor: theme.palette.primary.contrastText,
+}));
 
 // Connection status component to avoid complex union type
 const ConnectionStatusMessage: React.FC<{
@@ -56,11 +93,93 @@ const MessageItem: React.FC<{
   );
 };
 
+// Typing animation component
+const TypingAnimation: React.FC = () => {
+  // Animation variants for the dots
+  const dotVariants = {
+    initial: { y: 0 },
+    animate: { y: -5 }
+  };
+
+  // Staggered transition for the dots
+  const transition = {
+    duration: 0.5,
+    repeat: Infinity,
+    repeatType: "reverse" as const,
+    ease: "easeInOut"
+  };
+
+  // Get the active provider from Redux
+  const providers = useAppSelector(state => state.ai.providers);
+  const activeProvider = providers.find(p => p.isActive && p.isVerified);
+  
+  // Choose avatar based on provider
+  const getAvatar = () => {
+    if (activeProvider) {
+      // Use provider-specific avatar
+      switch (activeProvider.provider) {
+        case 'openai':
+          return <img src="/avatars/openai.png" alt="OpenAI" style={{ width: '100%', height: '100%' }} />;
+        case 'gemini':
+          return <img src="/avatars/gemini.png" alt="Gemini" style={{ width: '100%', height: '100%' }} onError={(e) => e.currentTarget.src = ''} />;
+        case 'anthropic':
+          return <img src="/avatars/anthropic.png" alt="Anthropic" style={{ width: '100%', height: '100%' }} />;
+        default:
+          return <BotIcon />;
+      }
+    } else {
+      return <BotIcon />;
+    }
+  };
+
+  return (
+    <TypingContainer
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -20 }}
+      transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+    >
+      <AvatarContainer>
+        <Avatar 
+          sx={{ 
+            width: 36, 
+            height: 36,
+            bgcolor: 'primary.main'
+          }}
+        >
+          {getAvatar()}
+        </Avatar>
+      </AvatarContainer>
+      <TypingBubble>
+        <TypingDot
+          variants={dotVariants}
+          initial="initial"
+          animate="animate"
+          transition={{ ...transition, delay: 0 }}
+        />
+        <TypingDot
+          variants={dotVariants}
+          initial="initial"
+          animate="animate"
+          transition={{ ...transition, delay: 0.15 }}
+        />
+        <TypingDot
+          variants={dotVariants}
+          initial="initial"
+          animate="animate"
+          transition={{ ...transition, delay: 0.3 }}
+        />
+      </TypingBubble>
+    </TypingContainer>
+  );
+};
+
 export const AIAssistantPanel: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
   const [inputValue, setInputValue] = useState('');
   const [tabValue, setTabValue] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const typingAnimationRef = useRef<HTMLDivElement>(null);
   const { 
     messages, 
     sendMessage, 
@@ -185,10 +304,16 @@ export const AIAssistantPanel: React.FC = () => {
     }
   }, [isOpen, tabValue, chatMessages, notificationMessages, markMessageAsRead]);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll to bottom when new messages arrive or when processing state changes
   useEffect(() => {
     scrollToBottom();
-  }, [filteredMessages]);
+  }, [filteredMessages, isProcessing]);
+
+  // Ensure the input is disabled when processing
+  useEffect(() => {
+    // This effect is just to make sure the component re-renders when isProcessing changes
+    // The actual disabling logic is in the isInputEnabled memo
+  }, [isProcessing]);
 
   // Auto-switch to notifications tab when verification messages arrive
   useEffect(() => {
@@ -230,13 +355,19 @@ export const AIAssistantPanel: React.FC = () => {
 
   // Determine if the input should be enabled
   const isInputEnabled = useMemo((): boolean => {
-    // If we have a verified provider, always enable input regardless of connection status
+    // If processing, disable input
+    if (isProcessing) {
+      return false;
+    }
+    
+    // If we have a verified provider, enable input regardless of connection status
     if (hasVerifiedProvider) {
       return true;
     }
+    
     // Otherwise, only enable if connected
     return connectionStatus === 'connected';
-  }, [hasVerifiedProvider, connectionStatus]);
+  }, [hasVerifiedProvider, connectionStatus, isProcessing]);
 
   // Determine effective connection status for UI display
   const effectiveConnectionStatus = useMemo(() => {
@@ -256,6 +387,8 @@ export const AIAssistantPanel: React.FC = () => {
       try {
         await sendMessage(inputValue.trim());
         setInputValue('');
+        // Scroll to bottom immediately when sending a message
+        setTimeout(scrollToBottom, 100);
       } catch (error) {
         logger.error('Error sending message:', error);
       }
@@ -330,6 +463,22 @@ export const AIAssistantPanel: React.FC = () => {
                       </Typography>
                     )}
                   </AnimatePresence>
+                  
+                  {/* Add typing animation when processing */}
+                  <AnimatePresence>
+                    {isProcessing && (
+                      <motion.div 
+                        ref={typingAnimationRef}
+                        initial={{ opacity: 0, y: 20 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        exit={{ opacity: 0, y: -20 }}
+                        transition={{ type: 'spring', stiffness: 500, damping: 30 }}
+                      >
+                        <TypingAnimation key="typing-animation" />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                  
                   <div ref={messagesEndRef} />
                 </MessageList>
                 <InputContainer>
@@ -337,7 +486,7 @@ export const AIAssistantPanel: React.FC = () => {
                     <TextField
                       fullWidth
                       variant="outlined"
-                      placeholder="Type a message..."
+                      placeholder={isProcessing ? "AI is thinking..." : "Type a message..."}
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyPress={handleKeyPress}

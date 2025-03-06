@@ -440,6 +440,8 @@ export const AIMessagesProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         // CRITICAL: Force correct message types based on role
         if (message.role === 'assistant') {
           message.metadata.type = 'chat';
+          // If we receive an assistant message, set processing to false
+          dispatch({ type: 'SET_PROCESSING', isProcessing: false });
         } else if (message.role === 'user') {
           message.metadata.type = 'chat';
         } else if (message.role === 'system') {
@@ -465,6 +467,8 @@ export const AIMessagesProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         dispatch({ type: 'ADD_MESSAGE', message });
       } catch (error) {
         logger.error('Error handling AI message:', error);
+        // If there's an error, make sure to set processing to false
+        dispatch({ type: 'SET_PROCESSING', isProcessing: false });
       }
     };
 
@@ -579,6 +583,9 @@ export const AIMessagesProvider: React.FC<{ children: React.ReactNode }> = ({ ch
         }
       });
       logger.info('Message sent successfully');
+      
+      // Note: We don't set isProcessing to false here anymore
+      // It will be set to false when we receive a response from the AI
     } catch (error) {
       logger.error('Error sending message:', error);
       
@@ -597,7 +604,8 @@ export const AIMessagesProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       };
       
       dispatch({ type: 'ADD_MESSAGE', message: errorMessage });
-    } finally {
+      
+      // Set processing to false on error
       dispatch({ type: 'SET_PROCESSING', isProcessing: false });
     }
   }, [isConnected, state.messages, state.connectionStatus, reduxIsConnected]);

@@ -168,26 +168,6 @@ const ChatMessage: React.FC<{ message: AIMessage }> = ({ message }) => {
   
   // Get provider information if available
   const provider = message.metadata?.provider || 'unknown';
-  
-  // Choose avatar based on role and provider
-  const getAvatar = () => {
-    if (isAI) {
-      // Use provider-specific avatar for AI
-      switch (provider) {
-        case 'openai':
-          return <img src="/avatars/openai.png" alt="OpenAI" style={{ width: '100%', height: '100%' }} />;
-        case 'gemini':
-          return <img src="/avatars/gemini.png" alt="Gemini" style={{ width: '100%', height: '100%' }} onError={(e) => e.currentTarget.src = ''} />;
-        case 'anthropic':
-          return <img src="/avatars/anthropic.png" alt="Anthropic" style={{ width: '100%', height: '100%' }} />;
-        default:
-          return <BotIcon />;
-      }
-    } else {
-      // Use user avatar for user messages
-      return <PersonIcon />;
-    }
-  };
 
   return (
     <MessageContainer isAI={isAI}>
@@ -200,7 +180,7 @@ const ChatMessage: React.FC<{ message: AIMessage }> = ({ message }) => {
               bgcolor: isAI ? 'primary.main' : 'secondary.main'
             }}
           >
-            {getAvatar()}
+            {isAI ? <BotIcon /> : <PersonIcon />}
           </Avatar>
         </AvatarContainer>
         <MessageContentContainer>
