@@ -159,14 +159,14 @@ export class AppEngine extends EventEmitter {
         // Initialize WebSocket service first
         await this.initializeWebSocket();
         
-        // Then configure Express app
-        await this.configureApp();
-        
-        // Then initialize other services
+        // Initialize other services before configuring the app
         await this.initializeAISettings();
         await this.initializeMonitoring();
         await this.initializeAI();
         await this.initializeSystemMetrics();
+        
+        // Configure Express app after all services are initialized
+        await this.configureApp();
 
         // Start monitoring
         await this.startHealthChecks();
@@ -329,6 +329,9 @@ export class AppEngine extends EventEmitter {
       // Set dependencies
       this.aiService.setWebSocketService(this.webSocketService);
       this.aiService.setAISettingsService(this.aiSettingsService);
+      
+      // Set AI service in WebSocket service
+      this.webSocketService.setAIService(this.aiService);
       
       // Initialize base functionality
       await this.aiService.initializeBase();

@@ -8,7 +8,8 @@ const TabPanel = styled(Box)(({ theme }) => ({
   overflowY: 'hidden',
   display: 'flex',
   flexDirection: 'column',
-  position: 'relative'
+  position: 'relative',
+  height: 'calc(100% - 48px)'
 }));
 
 interface TabPanelProps {
@@ -31,9 +32,8 @@ export const TabPanelComponent: React.FC<TabPanelProps> = ({
       id={`ai-tab-${index}`}
       aria-labelledby={`ai-tab-${index}`}
       sx={{ 
-        display: 'flex', 
-        flexDirection: 'column', 
-        height: 'calc(100% - 48px)',
+        display: value === index ? 'flex' : 'none',
+        flexDirection: 'column',
         ...(isNotificationPanel && {
           '& > div': {
             display: 'flex',

@@ -70,6 +70,15 @@ export async function createApp(wsService: WebSocketService) {
   // Store WebSocket service in app
   app.set('wsService', wsService);
   app.set('appEngine', appEngine);
+  
+  // Store AI service in app
+  try {
+    const aiService = appEngine.getAIService();
+    app.set('aiService', aiService);
+    logger.info('AI service set in Express app');
+  } catch (error) {
+    logger.warn('Failed to set AI service in Express app:', error);
+  }
 
   // Health check and config routes (public)
   app.use('/health', createHealthRoutes());

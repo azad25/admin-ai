@@ -12,6 +12,7 @@ import { AppError } from '../middleware/errorHandler';
 import { LLMProvider } from '@admin-ai/shared/src/types/ai';
 import { LogEntry } from '@admin-ai/shared/src/types/logs';
 import { randomUUID } from 'crypto';
+import jwt from 'jsonwebtoken';
 
 interface TokenRefreshError extends AppError {
   code: 'TOKEN_REFRESH_REQUIRED';
@@ -33,6 +34,7 @@ export class WebSocketService {
   private messageQueue: Map<string, Array<{event: string, data: any}>> = new Map();
   private recentlyProcessedMessages: Set<string> = new Set();
   private readonly MAX_RECENT_MESSAGES = 100;
+  private aiService: AIService | null = null;
 
   private constructor() {}
 
@@ -79,7 +81,16 @@ export class WebSocketService {
       this.io.on('connection', (socket) => {
         logger.info(`Client connected: ${socket.id}`);
 
-        socket.on('register', (userId: string) => {
+        socket.on('register', (userIdOrToken: string) => {
+          // Extract userId from token if it's a JWT token
+          const userId = this.extractUserIdFromToken(userIdOrToken);
+          
+          if (!userId) {
+            logger.warn(`Invalid user ID or token provided: ${userIdOrToken}`);
+            socket.emit('error', { message: 'Invalid user ID or token provided' });
+            return;
+          }
+          
           if (!this.userSockets.has(userId)) {
             this.userSockets.set(userId, []);
           }
@@ -137,9 +148,15 @@ export class WebSocketService {
               return;
             }
             
-            // Check if this is an AI response message (to prevent feedback loops)
-            if (data.content.includes("I received your message:")) {
-              logger.debug(`Skipping processing of AI response message to prevent feedback loop`);
+            // Skip processing if this is an AI-generated message
+            // Check both role and metadata to determine if it's an AI message
+            if (
+              data.role === 'assistant' || 
+              (data.metadata && data.metadata.provider) ||
+              data.content.includes("I received your message:") ||
+              data.content.includes("I'm sorry, but I encountered an error")
+            ) {
+              logger.debug(`Skipping processing of AI response message to prevent feedback loop: ${data.id}`);
               return;
             }
             
@@ -176,7 +193,15 @@ export class WebSocketService {
               return;
             }
             
-            logger.info(`Processing message for user ${userId}: ${data.content || ''}`, { timestamp: new Date().toISOString() });
+            // Extract the actual UUID from the userId if it's a JWT token
+            const extractedUserId = this.extractUserIdFromToken(userId);
+
+            if (!extractedUserId) {
+              logger.warn(`Cannot process message: Invalid user ID for socket ${socket.id}`);
+              return;
+            }
+            
+            logger.info(`Processing message for user ${extractedUserId}: ${data.content || ''}`, { timestamp: new Date().toISOString() });
             
             // Create a user message to echo back what was sent
             const userMessage: AIMessage = {
@@ -195,34 +220,59 @@ export class WebSocketService {
             await this.sendToUser(userId, 'ai:message', userMessage);
             // Also emit as 'message' for compatibility
             await this.sendToUser(userId, 'message' as any, userMessage);
-            logger.info(`Sent user message confirmation to user ${userId}`);
+            logger.info(`Sent user message confirmation to user ${extractedUserId}`);
             
-            // Create a response message
-            const responseMessage: AIMessage = {
-              id: randomUUID(),
-              content: `I received your message: "${data.content}". This is a response from the AI service.`,
-              role: 'assistant',
-              timestamp: new Date().toISOString(),
-              metadata: {
-                type: 'chat',
-                read: false,
-                provider: 'gemini',
-                model: 'gemini-2.0-flash',
-                timestamp: new Date().toISOString()
-              }
-            };
-            
-            // Add a small delay to simulate processing
-            setTimeout(async () => {
+            // Process the message using the AI service
+            if (this.aiService && extractedUserId) {
               try {
-                await this.sendToUser(userId!, 'ai:message', responseMessage);
+                // Process the message and get a response
+                const responseMessage = await this.aiService.processUserMessage(extractedUserId, data);
+                
+                // Send the response back to the user
+                await this.sendToUser(userId, 'ai:message', responseMessage);
                 // Also emit as 'message' for compatibility
-                await this.sendToUser(userId!, 'message' as any, responseMessage);
-                logger.info(`Sent AI response to user ${userId}`);
+                await this.sendToUser(userId, 'message' as any, responseMessage);
+                logger.info(`Sent AI response to user ${extractedUserId}`);
               } catch (error) {
-                logger.error(`Error sending AI response to user ${userId}:`, error);
+                logger.error(`Error processing message with AI service:`, error);
+                
+                // Send an error message if AI processing fails
+                const errorMessage: AIMessage = {
+                  id: randomUUID(),
+                  content: `I'm sorry, but I encountered an error while processing your message.`,
+                  role: 'assistant',
+                  timestamp: new Date().toISOString(),
+                  metadata: {
+                    type: 'chat',
+                    read: false,
+                    timestamp: new Date().toISOString()
+                  }
+                };
+                
+                await this.sendToUser(userId, 'ai:message', errorMessage);
+                await this.sendToUser(userId, 'message' as any, errorMessage);
               }
-            }, 1000);
+            } else {
+              if (extractedUserId) {
+                logger.warn(`AI service not available for processing message from user ${extractedUserId}`);
+                
+                // Send a fallback message if AI service is not available
+                const fallbackMessage: AIMessage = {
+                  id: randomUUID(),
+                  content: `I received your message: "${data.content}". The AI service is currently unavailable.`,
+                  role: 'assistant',
+                  timestamp: new Date().toISOString(),
+                  metadata: {
+                    type: 'chat',
+                    read: false,
+                    timestamp: new Date().toISOString()
+                  }
+                };
+                
+                await this.sendToUser(userId, 'ai:message', fallbackMessage);
+                await this.sendToUser(userId, 'message' as any, fallbackMessage);
+              }
+            }
             
           } catch (error) {
             logger.error('Error processing message:', error);
@@ -231,6 +281,12 @@ export class WebSocketService {
 
         socket.on('ai:chat', async (data: { message: string }) => {
           try {
+            // Skip empty messages
+            if (!data.message || typeof data.message !== 'string') {
+              logger.warn(`Received invalid AI chat format from socket ${socket.id}`);
+              return;
+            }
+            
             logger.info(`Received AI chat message: ${data.message}`);
             
             // Find the user ID associated with this socket
@@ -247,7 +303,15 @@ export class WebSocketService {
               return;
             }
             
-            logger.info(`Processing AI chat for user ${userId}: ${data.message}`);
+            // Extract the actual UUID from the userId if it's a JWT token
+            const extractedUserId = this.extractUserIdFromToken(userId);
+
+            if (!extractedUserId) {
+              logger.warn(`Cannot process AI chat: Invalid user ID for socket ${socket.id}`);
+              return;
+            }
+            
+            logger.info(`Processing AI chat for user ${extractedUserId}: ${data.message}`);
             
             // Create a user message to echo back what was sent
             const userMessage: AIMessage = {
@@ -264,32 +328,55 @@ export class WebSocketService {
             
             // Send the user message back to confirm it was received
             await this.sendToUser(userId, 'ai:message', userMessage);
-            logger.info(`Sent user message confirmation to user ${userId}`);
+            logger.info(`Sent user message confirmation to user ${extractedUserId}`);
             
-            // Create a response message
-            const responseMessage: AIMessage = {
-              id: randomUUID(),
-              content: `I received your message: "${data.message}". This is a placeholder response since the AI service integration is not fully implemented yet.`,
-              role: 'assistant',
-              timestamp: new Date().toISOString(),
-              metadata: {
-                type: 'chat',
-                read: false,
-                provider: 'gemini',
-                model: 'gemini-2.0-flash',
-                timestamp: new Date().toISOString()
-              }
-            };
-            
-            // Add a small delay to simulate processing
-            setTimeout(async () => {
+            // Process the message using the AI service
+            if (this.aiService && extractedUserId) {
               try {
-                await this.sendToUser(userId!, 'ai:message', responseMessage);
-                logger.info(`Sent AI response to user ${userId}`);
+                // Process the message and get a response
+                const responseMessage = await this.aiService.processUserMessage(extractedUserId, data.message);
+                
+                // Send the response back to the user
+                await this.sendToUser(userId, 'ai:message', responseMessage);
+                logger.info(`Sent AI response to user ${extractedUserId}`);
               } catch (error) {
-                logger.error(`Error sending AI response to user ${userId}:`, error);
+                logger.error(`Error processing AI chat with AI service:`, error);
+                
+                // Send an error message if AI processing fails
+                const errorMessage: AIMessage = {
+                  id: randomUUID(),
+                  content: `I'm sorry, but I encountered an error while processing your message.`,
+                  role: 'assistant',
+                  timestamp: new Date().toISOString(),
+                  metadata: {
+                    type: 'chat',
+                    read: false,
+                    timestamp: new Date().toISOString()
+                  }
+                };
+                
+                await this.sendToUser(userId, 'ai:message', errorMessage);
               }
-            }, 1000);
+            } else {
+              if (extractedUserId) {
+                logger.warn(`AI service not available for processing AI chat from user ${extractedUserId}`);
+                
+                // Send a fallback message if AI service is not available
+                const fallbackMessage: AIMessage = {
+                  id: randomUUID(),
+                  content: `I received your message: "${data.message}". The AI service is currently unavailable.`,
+                  role: 'assistant',
+                  timestamp: new Date().toISOString(),
+                  metadata: {
+                    type: 'chat',
+                    read: false,
+                    timestamp: new Date().toISOString()
+                  }
+                };
+                
+                await this.sendToUser(userId, 'ai:message', fallbackMessage);
+              }
+            }
             
           } catch (error) {
             logger.error('Error processing AI chat message:', error);
@@ -532,6 +619,25 @@ export class WebSocketService {
   public setMonitoringService(monitoring: MonitoringService): void {
     this.monitoring = monitoring;
     this.setupMonitoringEvents();
+  }
+
+  public setAIService(service: AIService): void {
+    this.aiService = service;
+  }
+
+  // Add this helper function to extract userId from JWT token
+  private extractUserIdFromToken(token: string): string | null {
+    try {
+      // Check if the token is a JWT token (starts with ey and contains two dots)
+      if (token && token.startsWith('ey') && token.split('.').length === 3) {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'your-super-secret-jwt-key') as any;
+        return decoded?.userId || null;
+      }
+      return token; // If not a JWT token, return as is
+    } catch (error) {
+      logger.error('Failed to decode JWT token:', error);
+      return null; // Return null if decoding fails
+    }
   }
 }
 

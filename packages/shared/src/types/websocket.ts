@@ -13,7 +13,14 @@ export interface WebSocketEvents {
   'ai:start': void;
   'ai:end': void;
   'ai:error': { message: string };
-  'ai:status': { ready: boolean };
+  'ai:status': { 
+    ready: boolean;
+    initialized?: boolean;
+    connected?: boolean;
+    hasProviders?: boolean;
+    activeProviders?: string[];
+    timestamp?: string;
+  };
   'ai:ready': void;
 
   // Metrics events

@@ -181,8 +181,11 @@ class AuthController {
         // Initialize AI providers for the user
         const aiService = req.app.get('aiService');
         if (aiService) {
+          logger.info('Initializing AI providers for user after login', { userId: user.id });
           await aiService.initializeProvidersForUser(user.id);
           logger.info('AI providers initialized for user after login', { userId: user.id });
+        } else {
+          logger.warn('AI service not available for initialization after login', { userId: user.id });
         }
       } catch (error) {
         // Log error but don't fail login

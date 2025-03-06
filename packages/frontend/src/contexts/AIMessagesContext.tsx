@@ -39,14 +39,17 @@ interface State {
 
 // Define reducer function
 const reducer = (state: State, action: Action): State => {
-  console.log('AIMessagesContext reducer called with action:', action.type);
-  
   switch (action.type) {
     case 'SET_CONNECTION_STATUS':
       return { ...state, connectionStatus: action.status };
     
     case 'ADD_MESSAGE': {
-      console.log('Processing ADD_MESSAGE action with message:', action.message);
+      // Check if message already exists in state
+      const messageExists = state.messages.some(msg => msg.id === action.message.id);
+      if (messageExists) {
+        return state;
+      }
+      
       // Check if this is a connection notification
       const isConnectionNotification = 
         action.message.metadata?.type === 'notification' && 
@@ -403,80 +406,78 @@ export const AIMessagesProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     // Define message handler inside the effect
     const handleMessage = (data: any) => {
       try {
-        console.log('AIMessagesContext.handleMessage called with data:', data);
-        
         // Skip AI responses that contain "I received your message" to prevent feedback loops
         if (typeof data?.content === 'string' && data.content.includes('I received your message:')) {
-          console.log('Skipping AI response message to prevent feedback loop');
           return;
         }
 
         // Validate message structure
         if (!data || typeof data !== 'object') {
-          console.error('Invalid AI message received:', data);
+          logger.error('Invalid AI message received:', data);
           return;
         }
 
         // Check for required fields
         if (!data.id || !data.content) {
-          console.error('AI message missing required fields:', data);
+          logger.error('AI message missing required fields:', data);
           return;
         }
 
         // Handle verification message
         if (data.type === 'verification') {
-          console.log('Setting connection status to connected due to verification message');
           dispatch({ type: 'SET_CONNECTION_STATUS', status: 'connected' });
           return;
         }
 
+        // Create a new message object to avoid reference issues
+        const message = { ...data };
+
         // Ensure message has metadata
-        if (!data.metadata) {
-          data.metadata = {};
+        if (!message.metadata) {
+          message.metadata = {};
         }
 
-        // Set default type to 'chat' for assistant messages if not specified
-        if (data.role === 'assistant' && !data.metadata.type) {
-          console.log('Setting message type to chat for assistant message');
-          data.metadata.type = 'chat';
+        // CRITICAL: Force correct message types based on role
+        if (message.role === 'assistant') {
+          message.metadata.type = 'chat';
+        } else if (message.role === 'user') {
+          message.metadata.type = 'chat';
+        } else if (message.role === 'system') {
+          message.metadata.type = 'notification';
         }
 
-        // Set default type to 'chat' for user messages if not specified
-        if (data.role === 'user' && !data.metadata.type) {
-          console.log('Setting message type to chat for user message');
-          data.metadata.type = 'chat';
+        // Add timestamp if not present
+        if (!message.timestamp) {
+          message.timestamp = new Date().toISOString();
         }
 
-        // Set default type to 'notification' for system messages if not specified
-        if (data.role === 'system' && !data.metadata.type) {
-          console.log('Setting message type to notification for system message');
-          data.metadata.type = 'notification';
+        // Add read status if not present
+        if (message.metadata.read === undefined) {
+          message.metadata.read = false;
         }
 
-        // Add message to state if it's new
-        if (!state.messages.some(msg => msg.id === data.id)) {
-          console.log('Adding message to state:', data);
-          dispatch({ type: 'ADD_MESSAGE', message: data });
-        } else {
-          console.log('Message already exists in state, skipping:', data.id);
+        // Check if message already exists to avoid duplicates
+        const messageExists = state.messages.some(msg => msg.id === message.id);
+        if (messageExists) {
+          return;
         }
+
+        dispatch({ type: 'ADD_MESSAGE', message });
       } catch (error) {
-        console.error('Error processing AI message:', error);
+        logger.error('Error handling AI message:', error);
       }
     };
 
-    // Add event listeners
+    // Register event handlers
     wsService.on('ai:message', handleMessage);
-    wsService.on('notification', handleMessage);
     wsService.on('message', handleMessage);
 
-    // Clean up event listeners when component unmounts
+    // Clean up event handlers
     return () => {
       wsService.off('ai:message', handleMessage);
-      wsService.off('notification', handleMessage);
       wsService.off('message', handleMessage);
     };
-  }, []);
+  }, [state.messages]);
 
   // Calculate unread count separately
   useEffect(() => {

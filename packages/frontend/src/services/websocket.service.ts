@@ -252,23 +252,19 @@ export class WebSocketService extends SimpleEventEmitter {
 
     // AI-related events
     this.socket.on('ai:message', (data) => {
-      console.log('WebSocket received ai:message event:', data);
       this.emit('ai:message', data);
     });
 
     this.socket.on('ai:error', (data) => {
-      console.log('WebSocket received ai:error event:', data);
       this.emit('ai:error', data);
     });
 
     this.socket.on('ai:status', (data) => {
-      console.log('WebSocket received ai:status event:', data);
       this.emit('ai:status', data);
     });
 
     // Add handler for 'message' event
     this.socket.on('message', (data) => {
-      console.log('WebSocket received message event:', data);
       this.emit('message', data);
     });
 

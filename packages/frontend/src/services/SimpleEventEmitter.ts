@@ -2,6 +2,8 @@
  * A simple event emitter implementation for browser compatibility
  * This replaces the Node.js EventEmitter which is not available in browsers
  */
+import { logger } from '../utils/logger';
+
 export class SimpleEventEmitter {
   private events: Record<string, Array<(...args: any[]) => void>> = {};
 
@@ -32,26 +34,22 @@ export class SimpleEventEmitter {
   }
 
   /**
-   * Emit an event with arguments
-   * @param event The event name
-   * @param args Arguments to pass to listeners
+   * Emit an event with the given arguments
+   * @param event The event to emit
+   * @param args The arguments to pass to the event handlers
    */
-  public emit(event: string, ...args: any[]): boolean {
-    console.log(`SimpleEventEmitter.emit called for event: ${event}`, args);
+  public emit(event: string, ...args: any[]): void {
     if (!this.events[event]) {
-      console.log(`No listeners found for event: ${event}`);
-      return false;
+      return;
     }
-    console.log(`Found ${this.events[event].length} listeners for event: ${event}`);
+
     this.events[event].forEach(listener => {
       try {
-        console.log(`Calling listener for event: ${event}`);
         listener(...args);
       } catch (error) {
-        console.error(`Error in event listener for ${event}:`, error);
+        logger.error(`Error in event listener for ${event}:`, error);
       }
     });
-    return true;
   }
 
   /**

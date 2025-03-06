@@ -108,6 +108,66 @@ export class AIService extends EventEmitter {
     anthropic: undefined
   };
 
+  /**
+   * Initialize AI providers for a specific user
+   * This method is called after user login to ensure the AI service is ready
+   * @param userId The ID of the user to initialize providers for
+   */
+  public async initializeProvidersForUser(userId: string): Promise<void> {
+    try {
+      logger.info(`Initializing AI providers for user ${userId}`);
+      
+      if (!this.aiSettingsService) {
+        logger.warn('Cannot initialize providers: AI Settings service not available');
+        return;
+      }
+      
+      // Get all provider settings for the user
+      const providers = await this.aiSettingsService.getAllProviderSettings(userId);
+      
+      // Find active and verified providers
+      const activeProviders = providers.filter(p => p.isActive && p.isVerified);
+      
+      if (activeProviders.length === 0) {
+        logger.info(`No active verified providers found for user ${userId}`);
+        return;
+      }
+      
+      // Initialize each active provider
+      for (const provider of activeProviders) {
+        const providerType = provider.provider as LLMProvider;
+        
+        // Skip if this provider is already initialized
+        if (this.llmClients[providerType]) {
+          logger.info(`${providerType} client already initialized, skipping`);
+          continue;
+        }
+        
+        // Get the decrypted API key
+        const apiKey = await this.aiSettingsService.getDecryptedApiKey(userId, providerType);
+        
+        if (!apiKey) {
+          logger.warn(`No API key found for ${providerType}, skipping initialization`);
+          continue;
+        }
+        
+        // Initialize the client
+        await this.initializeClient(providerType, apiKey);
+        
+        logger.info(`Successfully initialized ${providerType} client for user ${userId}`);
+      }
+      
+      // Update status after initialization
+      this.providersInitialized = true;
+      await this.broadcastStatus();
+      
+      logger.info(`AI providers initialization completed for user ${userId}`);
+    } catch (error) {
+      logger.error(`Failed to initialize AI providers for user ${userId}:`, error);
+      // Don't throw the error to prevent login failure
+    }
+  }
+
   private async generateSystemMessage(
     content: string,
     status: 'success' | 'error' | 'info' | 'warning',
@@ -292,19 +352,174 @@ Generate a response that:
     if (!this.webSocketService) return;
 
     const now = Date.now();
-    if (now - this.lastStatusBroadcast < this.STATUS_BROADCAST_DEBOUNCE) return;
+    if (now - this.lastStatusBroadcast < this.STATUS_BROADCAST_DEBOUNCE && this.lastReadyStatus === this.isReady) return;
+
+    // Get active providers
+    const activeProviders = Object.entries(this.llmClients)
+      .filter(([_, client]) => client !== undefined)
+      .map(([provider, _]) => provider);
 
     const status: WebSocketEvents['ai:status'] = {
-      ready: this.isReady
+      ready: this.isReady,
+      initialized: this.isBaseInitialized,
+      connected: this.isBaseInitialized && activeProviders.length > 0,
+      hasProviders: activeProviders.length > 0,
+      activeProviders,
+      timestamp: new Date().toISOString()
     };
 
+    logger.info(`Broadcasting AI status: ${JSON.stringify(status)}`);
     await this.webSocketService.broadcast('ai:status', status);
     this.lastStatusBroadcast = now;
+    this.lastReadyStatus = this.isReady;
   }
 
   public async sendMessage(userId: string, message: AIMessage): Promise<void> {
     if (!this.webSocketService) return;
     await this.webSocketService.sendToUser(userId, 'ai:message', message);
+  }
+
+  /**
+   * Process a user message and generate a response using the active AI provider
+   * @param userId The ID of the user sending the message
+   * @param message The message content or AIMessage object
+   * @returns The AI-generated response message
+   */
+  public async processUserMessage(userId: string, message: string | AIMessage): Promise<AIMessage> {
+    try {
+      logger.info(`Processing user message for user ${userId}`);
+      
+      // Get the active provider for this user
+      const provider = await this.getActiveProvider(userId);
+      
+      if (!provider || !provider.isActive || !provider.isVerified) {
+        logger.warn(`No active verified provider found for user ${userId}`);
+        return {
+          id: randomUUID(),
+          content: "I'm sorry, but there is no active AI provider configured. Please check your AI settings.",
+          role: 'assistant',
+          timestamp: new Date().toISOString(),
+          metadata: {
+            type: 'chat',
+            read: false,
+            timestamp: new Date().toISOString()
+          }
+        };
+      }
+      
+      // Extract message content
+      const content = typeof message === 'string' ? message : message.content;
+      
+      // Get the appropriate LLM client
+      let llmClient = this.llmClients[provider.provider as LLMProvider];
+      
+      // If the client is not initialized, try to initialize it
+      if (!llmClient && this.aiSettingsService) {
+        try {
+          logger.info(`LLM client not initialized for provider ${provider.provider}, attempting to initialize now`);
+          
+          // Get the decrypted API key
+          const apiKey = await this.aiSettingsService.getDecryptedApiKey(userId, provider.provider as LLMProvider);
+          
+          if (apiKey) {
+            // Initialize the client
+            await this.initializeClient(provider.provider as LLMProvider, apiKey);
+            
+            // Get the client again after initialization
+            llmClient = this.llmClients[provider.provider as LLMProvider];
+            
+            logger.info(`Successfully initialized ${provider.provider} client for user ${userId}`);
+          } else {
+            logger.warn(`No API key found for ${provider.provider}, cannot initialize client`);
+          }
+        } catch (error) {
+          logger.error(`Failed to initialize ${provider.provider} client:`, error);
+        }
+      }
+      
+      // Check if client is now initialized
+      if (!llmClient) {
+        logger.warn(`LLM client not initialized for provider ${provider.provider}`);
+        return {
+          id: randomUUID(),
+          content: `I'm sorry, but the ${provider.provider} service is not properly initialized. Please check your API key and settings.`,
+          role: 'assistant',
+          timestamp: new Date().toISOString(),
+          metadata: {
+            type: 'chat',
+            read: false,
+            provider: provider.provider,
+            model: provider.selectedModel,
+            timestamp: new Date().toISOString()
+          }
+        };
+      }
+      
+      // Generate response based on the provider
+      let responseContent = '';
+      
+      switch (provider.provider) {
+        case 'openai':
+          const openaiResponse = await (llmClient as OpenAI).chat.completions.create({
+            model: provider.selectedModel || 'gpt-3.5-turbo',
+            messages: [{ role: 'user', content }],
+          });
+          responseContent = openaiResponse.choices[0]?.message?.content || 'No response generated';
+          break;
+          
+        case 'gemini':
+          const geminiModel = (llmClient as GoogleGenerativeAI).getGenerativeModel({
+            model: provider.selectedModel || 'gemini-2.0-flash',
+            safetySettings: this.safetySettings
+          });
+          const geminiResponse = await geminiModel.generateContent(content);
+          responseContent = geminiResponse.response.text() || 'No response generated';
+          break;
+          
+        case 'anthropic':
+          const anthropicResponse = await (llmClient as Anthropic).messages.create({
+            model: provider.selectedModel || 'claude-3-haiku-20240307',
+            max_tokens: 1024,
+            messages: [{ role: 'user', content }]
+          });
+          responseContent = anthropicResponse.content[0]?.text || 'No response generated';
+          break;
+          
+        default:
+          responseContent = `Provider ${provider.provider} is not supported yet.`;
+      }
+      
+      // Create and return the response message
+      return {
+        id: randomUUID(),
+        content: responseContent,
+        role: 'assistant',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          type: 'chat',
+          read: false,
+          provider: provider.provider,
+          model: provider.selectedModel,
+          timestamp: new Date().toISOString()
+        }
+      };
+      
+    } catch (error) {
+      logger.error('Error processing user message:', error);
+      
+      // Return an error message
+      return {
+        id: randomUUID(),
+        content: `I'm sorry, but I encountered an error while processing your message: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        role: 'assistant',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          type: 'chat',
+          read: false,
+          timestamp: new Date().toISOString()
+        }
+      };
+    }
   }
 
   public async broadcastMessage(message: AIMessage): Promise<void> {

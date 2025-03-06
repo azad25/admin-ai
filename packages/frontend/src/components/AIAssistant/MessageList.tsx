@@ -10,7 +10,7 @@ export const MessageList = styled(Box)(({ theme }) => ({
   display: 'flex',
   flexDirection: 'column',
   gap: theme.spacing(2),
-  height: 'calc(100% - 70px)',
+  height: '100%',
 }));
 
 // Updated component for notifications that displays from top to bottom
@@ -20,9 +20,9 @@ export const NotificationList = styled(Box)(({ theme }) => ({
   padding: theme.spacing(2),
   paddingBottom: theme.spacing(16),
   display: 'flex',
-  flexDirection: 'column', // Changed from column-reverse to column
+  flexDirection: 'column',
   gap: theme.spacing(2),
-  height: 'calc(100% - 70px)',
+  height: '100%',
 }));
 
 export const InputContainer = styled(Box)(({ theme }) => ({
@@ -34,5 +34,4 @@ export const InputContainer = styled(Box)(({ theme }) => ({
   right: 0,
   backgroundColor: theme.palette.background.paper,
   zIndex: 10,
-  width: '100%',
 })); 
