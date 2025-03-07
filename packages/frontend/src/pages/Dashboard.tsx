@@ -29,6 +29,9 @@ import {
   InputLabel,
   Select,
   MenuItem,
+  Tab,
+  Tabs,
+  useTheme,
 } from '@mui/material';
 import {
   Refresh as RefreshIcon,
@@ -39,6 +42,11 @@ import {
   Add as AddIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
+  Memory as MemoryIcon,
+  Storage as StorageIcon,
+  Speed as SpeedIcon,
+  Timeline as TimelineIcon,
+  Security as SecurityIcon,
 } from '@mui/icons-material';
 import {
   LineChart,
@@ -50,81 +58,41 @@ import {
   Legend,
   ResponsiveContainer,
 } from 'recharts';
-import { systemMetricsService, LogEntry, ErrorLogEntry, AuthLogEntry, RequestMetric } from '../services/systemMetrics.service';
+import { systemMetricsService, LogEntry, ErrorLogEntry, AuthLogEntry, RequestMetric, RequestLocation } from '../services/systemMetrics.service';
 import { formatDistanceToNow } from 'date-fns';
 import { LiveRequestMap } from '../components/LiveRequestMap';
 import { useSnackbar } from '../contexts/SnackbarContext';
 import { crudPageService } from '../services/crudPages';
 import { authService } from '../services/auth';
 import { useAuth } from '../contexts/AuthContext';
-
-// Combined health interface to handle both old and new formats
-interface SystemHealth {
-  // New format
-  timestamp?: string;
-  score?: number;
-  status?: string;
-  services?: {
-    [key: string]: {
-      status: 'up' | 'down' | 'degraded';
-      lastCheck: string;
-      message?: string;
-    };
-  };
-  resources?: {
-    cpu?: {
-      usage: number;
-      status: 'critical' | 'warning' | 'normal';
-    };
-    memory?: {
-      usage: number;
-      status: 'critical' | 'warning' | 'normal';
-    };
-    disk?: {
-      usage: number;
-      status: 'critical' | 'warning' | 'normal';
-    };
-  };
-  
-  // Old format
-  uptime?: number;
-  cpu?: {
-    usage: number;
-    cores: number;
-    model: string;
-    speed: number;
-  };
-  memory?: {
-    total: number;
-    free: number;
-    usage: number;
-  };
-  database?: {
-    status: string;
-    active_connections: number;
-    db_size: number;
-    table_count: number;
-  };
-}
-
-interface CrudItem {
-  id: string;
-  pageId: string;
-  [key: string]: any;
-}
-
-interface CrudField {
-  name: string;
-  type: string;
-  required: boolean;
-}
+import { SystemHealthGauge } from '../components/SystemHealthGauge';
+import { AnimatedMetricsCard } from '../components/AnimatedMetricsCard';
+import { ErrorAnalysis } from '../components/ErrorAnalysis';
+import { AIGlobe } from '../components/3d/AIGlobe';
+import { AIActivityTimeline } from '../components/AIActivityTimeline';
+import { metricsService } from '../services/metrics.service';
+import { wsService } from '../services/websocket.service';
+import { useSocket } from '../contexts/SocketContext';
+import { SystemMetrics, PerformanceInsight, SecurityInsight, UsageInsight } from '../types/metrics';
+import { motion } from 'framer-motion';
+import { TabPanel } from '../components/dashboard/TabPanel';
+import SystemDashboard from '../components/dashboard/SystemDashboard';
+import AIDashboard from '../components/dashboard/AIDashboard';
+import CrudDialog from '../components/dashboard/CrudDialog';
+import { CrudItem, CrudField } from '../types/crud';
 
 export const Dashboard: React.FC = () => {
-  const [health, setHealth] = useState<SystemHealth | null>(null);
+  const theme = useTheme();
+  const [tabValue, setTabValue] = useState(0);
+  const { isConnected } = useSocket();
+  
+  // Standard Dashboard state
+  const [health, setHealth] = useState<any>(null);
   const [recentLogs, setRecentLogs] = useState<LogEntry[]>([]);
   const [errorLogs, setErrorLogs] = useState<ErrorLogEntry[]>([]);
   const [authLogs, setAuthLogs] = useState<AuthLogEntry[]>([]);
   const [requestMetrics, setRequestMetrics] = useState<RequestMetric[]>([]);
+  const [locations, setLocations] = useState<RequestLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const { user } = useAuth();
@@ -136,6 +104,17 @@ export const Dashboard: React.FC = () => {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [formData, setFormData] = useState<Record<string, any>>({});
   const { showSuccess, showError } = useSnackbar();
+  
+  // AI Dashboard state
+  const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
+  const [aiRequestMetrics, setAiRequestMetrics] = useState<any[]>([]);
+  const [performanceInsights, setPerformanceInsights] = useState<PerformanceInsight | null>(null);
+  const [securityInsights, setSecurityInsights] = useState<SecurityInsight | null>(null);
+  const [usageInsights, setUsageInsights] = useState<UsageInsight | null>(null);
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+  };
 
   const fetchData = async () => {
     try {
@@ -156,37 +135,207 @@ export const Dashboard: React.FC = () => {
         errorsData,
         authLogsData,
         metricsData,
+        locationsData,
       ] = await Promise.all([
         systemMetricsService.getSystemHealth(),
         systemMetricsService.getRecentLogs(),
         systemMetricsService.getErrorLogs(),
         systemMetricsService.getAuthLogs(),
         systemMetricsService.getRequestMetrics(),
+        systemMetricsService.getLocationHeatmap(),
       ]);
 
       setHealth(healthData);
-      setRecentLogs(logsData);
-      setErrorLogs(errorsData);
-      setAuthLogs(authLogsData);
-      setRequestMetrics(metricsData);
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('429')) {
-        setError('Rate limit exceeded. Please wait a moment before refreshing.');
+      setRecentLogs(logsData || []);
+      setErrorLogs(errorsData || []);
+      setAuthLogs(authLogsData || []);
+      
+      // Handle metrics data which might be in different formats
+      if (metricsData) {
+        if (Array.isArray(metricsData)) {
+          setRequestMetrics(metricsData);
+        } else if (metricsData.metrics) {
+          setRequestMetrics(metricsData.metrics);
+        }
       } else {
-        setError(err instanceof Error ? err.message : 'Failed to fetch system metrics');
+        setRequestMetrics([]);
       }
-      console.error('Error fetching system metrics:', err);
-    } finally {
+      
+      setLocations(locationsData || []);
+      
+      setLoading(false);
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+      setError('Failed to fetch dashboard data');
       setLoading(false);
     }
   };
 
-  // Increase polling interval to 2 minutes (120000ms)
+  // Fetch AI Dashboard data
+  const fetchAIDashboardData = async () => {
+    try {
+      const [
+        healthData,
+        metricsData,
+        requestMetricsData,
+        locationsData,
+        performanceData,
+        securityData,
+        usageData,
+      ] = await Promise.allSettled([
+        metricsService.getSystemHealth(),
+        metricsService.getSystemMetrics(),
+        metricsService.getRequestMetrics(),
+        metricsService.getLocationHeatmap(),
+        metricsService.getPerformanceInsights(),
+        metricsService.getSecurityInsights(),
+        metricsService.getUsageInsights(),
+      ]);
+
+      // Set data only if the promise was fulfilled
+      if (healthData.status === 'fulfilled') setHealth(healthData.value);
+      if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
+      if (requestMetricsData.status === 'fulfilled') setAiRequestMetrics(Array.isArray(requestMetricsData.value) ? requestMetricsData.value : []);
+      if (locationsData.status === 'fulfilled') setLocations(Array.isArray(locationsData.value) ? locationsData.value : []);
+      if (performanceData.status === 'fulfilled') setPerformanceInsights(performanceData.value);
+      if (securityData.status === 'fulfilled') setSecurityInsights(securityData.value);
+      if (usageData.status === 'fulfilled') setUsageInsights(usageData.value);
+
+      // Log any errors
+      [healthData, metricsData, requestMetricsData, locationsData, performanceData, securityData, usageData]
+        .filter(result => result.status === 'rejected')
+        .forEach(result => {
+          if (result.status === 'rejected') {
+            console.error('Error fetching dashboard data:', result.reason);
+          }
+        });
+    } catch (error) {
+      console.error('Error fetching AI dashboard data:', error);
+    }
+  };
+
+  // Add useEffect for WebSocket event handling
   useEffect(() => {
+    // Initial data fetch
     fetchData();
-    const interval = setInterval(fetchData, 120000);
-    return () => clearInterval(interval);
-  }, []);
+    
+    // Set up WebSocket connection and event listeners
+    if (wsService.isConnected()) {
+      // Request initial data via WebSocket
+      wsService.send('metrics:request', {});
+      
+      // Set up event listeners for real-time updates
+      
+      // Health updates - support both naming conventions
+      const healthUpdateHandler = (data: any) => {
+        setHealth(data);
+      };
+      wsService.on('health_update', healthUpdateHandler);
+      wsService.on('health:update', healthUpdateHandler);
+      
+      // Metrics updates
+      const metricsUpdateHandler = (data: any) => {
+        setHealth(data.health);
+        setMetrics(data.metrics);
+      };
+      wsService.on('metrics:update', metricsUpdateHandler);
+      
+      // Logs updates - support both naming conventions
+      const logsUpdateHandler = (data: any) => {
+        setRecentLogs(data);
+      };
+      wsService.on('logs_update', logsUpdateHandler);
+      wsService.on('logs:update', logsUpdateHandler);
+      
+      // Error logs updates - support both naming conventions
+      const errorLogsUpdateHandler = (data: any) => {
+        setErrorLogs(data);
+      };
+      wsService.on('error_logs_update', errorLogsUpdateHandler);
+      wsService.on('error:logs:update', errorLogsUpdateHandler);
+      
+      // Auth logs updates - support both naming conventions
+      const authLogsUpdateHandler = (data: any) => {
+        setAuthLogs(data);
+      };
+      wsService.on('auth_logs_update', authLogsUpdateHandler);
+      wsService.on('auth:logs:update', authLogsUpdateHandler);
+      
+      // Request metrics updates - support both naming conventions
+      const requestMetricsUpdateHandler = (data: any) => {
+        setRequestMetrics(data);
+      };
+      wsService.on('request_metrics_update', requestMetricsUpdateHandler);
+      wsService.on('request:metrics:update', requestMetricsUpdateHandler);
+      
+      // Location updates - support both naming conventions
+      const locationsUpdateHandler = (data: any) => {
+        setLocations(data);
+      };
+      wsService.on('locations_update', locationsUpdateHandler);
+      wsService.on('locations:update', locationsUpdateHandler);
+      
+      // AI analysis updates
+      const metricsAnalysisHandler = (data: any) => {
+        // Update AI-related state
+        if (data) {
+          // Handle AI analysis data
+        }
+      };
+      wsService.on('metrics:analysis', metricsAnalysisHandler);
+      
+      // Insights updates
+      const performanceInsightsHandler = (data: any) => {
+        setPerformanceInsights(data);
+      };
+      wsService.on('insights:performance:update', performanceInsightsHandler);
+      
+      const securityInsightsHandler = (data: any) => {
+        setSecurityInsights(data);
+      };
+      wsService.on('insights:security:update', securityInsightsHandler);
+      
+      const usageInsightsHandler = (data: any) => {
+        setUsageInsights(data);
+      };
+      wsService.on('insights:usage:update', usageInsightsHandler);
+    }
+    
+    // Set up polling if WebSocket is not connected
+    const pollingInterval = !wsService.isConnected() ? 
+      setInterval(() => {
+        fetchData();
+        if (tabValue === 1) {
+          fetchAIDashboardData();
+        }
+      }, 120000) : null; // Poll every 2 minutes
+    
+    return () => {
+      // Clean up WebSocket listeners
+      wsService.off('health_update');
+      wsService.off('health:update');
+      wsService.off('metrics:update');
+      wsService.off('logs_update');
+      wsService.off('logs:update');
+      wsService.off('error_logs_update');
+      wsService.off('error:logs:update');
+      wsService.off('auth_logs_update');
+      wsService.off('auth:logs:update');
+      wsService.off('request_metrics_update');
+      wsService.off('request:metrics:update');
+      wsService.off('locations_update');
+      wsService.off('locations:update');
+      wsService.off('metrics:analysis');
+      wsService.off('insights:performance:update');
+      wsService.off('insights:security:update');
+      wsService.off('insights:usage:update');
+      
+      // Clear polling interval
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [wsService.isConnected()]);
 
   // Separate effect for CRUD data with a longer interval
   useEffect(() => {
@@ -234,6 +383,37 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // Map system health status to gauge status for AI Dashboard
+  const getGaugeStatus = (status: any['status']): 'healthy' | 'warning' | 'critical' => {
+    switch (status) {
+      case 'healthy':
+        return 'healthy';
+      case 'warning':
+        return 'warning';
+      case 'error':
+        return 'critical';
+      default:
+        return 'warning';
+    }
+  };
+
+  // Transform locations data for the Globe component
+  const globeData = (locations || []).map(location => ({
+    latitude: location?.latitude || 0,
+    longitude: location?.longitude || 0,
+    intensity: Math.min(1, (location?.count || 1) / 100), // Normalize intensity
+    city: location?.city || 'Unknown',
+    country: location?.country || 'Unknown',
+  }));
+
+  // Transform locations data for the LiveRequestMap
+  const mapLocations = (locations || []).map(location => ({
+    latitude: location?.latitude || 0,
+    longitude: location?.longitude || 0,
+    count: location?.count || 1,
+    status: 'success', // Default to success, can be updated based on actual data
+  }));
+
   // CRUD functions
   const loadCrudData = async () => {
     try {
@@ -242,18 +422,16 @@ export const Dashboard: React.FC = () => {
         const firstPage = pages[0];
         const items = await crudPageService.getCrudPageData(firstPage.id);
         setItems(items || []);
-        setFields(firstPage.schema.fields || []);
+        if (firstPage.schema && firstPage.schema.fields) {
+          setFields(firstPage.schema.fields);
+        }
       } else {
         setItems([]);
         setFields([]);
       }
     } catch (err) {
-      console.error('Failed to load CRUD data:', err);
-      if (err instanceof Error && !err.message.includes('429')) {
-        showError('Failed to load items');
-      }
-      setItems([]);
-      setFields([]);
+      console.error('Error loading CRUD data:', err);
+      showError('Failed to load CRUD data');
     }
   };
 
@@ -265,46 +443,41 @@ export const Dashboard: React.FC = () => {
 
   const handleEdit = (item: CrudItem) => {
     setSelectedItem(item);
-    setFormData(item);
+    setFormData({ ...item });
     setIsDialogOpen(true);
   };
 
   const handleDelete = async (item: CrudItem) => {
     try {
       await crudPageService.deleteCrudPageData(item.pageId, item.id);
-      await loadCrudData();
       showSuccess('Item deleted successfully');
+      loadCrudData();
     } catch (err) {
+      console.error('Error deleting item:', err);
       showError('Failed to delete item');
     }
   };
 
   const handleSave = async () => {
     try {
-      if (!items.length) {
-        showError('No CRUD pages available. Please create a CRUD page first.');
-        setIsDialogOpen(false);
-        return;
-      }
-
-      const pageId = items[0]?.pageId;
-      if (!pageId) {
-        showError('Invalid page reference. Please refresh and try again.');
-        setIsDialogOpen(false);
-        return;
-      }
-
       if (selectedItem) {
-        await crudPageService.updateCrudPageData(selectedItem.pageId, selectedItem.id, formData);
+        // Update existing item
+        await crudPageService.updateCrudPageData(
+          selectedItem.pageId,
+          selectedItem.id,
+          formData
+        );
         showSuccess('Item updated successfully');
-      } else {
+      } else if (items.length > 0) {
+        // Add new item
+        const pageId = items[0].pageId;
         await crudPageService.createCrudPageData(pageId, formData);
         showSuccess('Item created successfully');
       }
       setIsDialogOpen(false);
-      await loadCrudData();
+      loadCrudData();
     } catch (err) {
-      console.error('Failed to save item:', err);
+      console.error('Error saving item:', err);
       showError('Failed to save item');
     }
   };
@@ -316,379 +489,76 @@ export const Dashboard: React.FC = () => {
     }));
   };
 
-  // Add manual refresh function with debounce
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const handleManualRefresh = async () => {
-    if (isRefreshing) return;
-    setIsRefreshing(true);
-    try {
+    setLoading(true);
+    
+    // Request fresh data via WebSocket for immediate update
+    if (wsService.isConnected()) {
+      wsService.send('metrics:request', {});
+      
+      // Set a timeout to ensure loading state is cleared even if WebSocket doesn't respond
+      setTimeout(() => {
+        setLoading(false);
+      }, 3000);
+    } else {
+      // Fallback to API if WebSocket is not connected
       await fetchData();
-      await loadCrudData();
-    } finally {
-      setIsRefreshing(false);
+      if (tabValue === 1) {
+        await fetchAIDashboardData();
+      }
+      setLoading(false);
     }
   };
 
-  if (loading && !health) {
-    return (
-      <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
-        <CircularProgress />
-      </Box>
-    );
-  }
-
-  if (error) {
-    return (
-      <Box p={3}>
-        <Alert severity="error">{error}</Alert>
-      </Box>
-    );
-  }
-
   return (
-    <Container maxWidth="lg">
-      <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
-        <Typography variant="h4">Dashboard</Typography>
-        <Box>
-          <IconButton 
-            onClick={handleManualRefresh} 
-            disabled={isRefreshing || loading}
-          >
-            <RefreshIcon />
-          </IconButton>
-        </Box>
+    <Box sx={{ width: '100%' }}>
+      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+        <Tabs value={tabValue} onChange={handleTabChange} aria-label="dashboard tabs">
+          <Tab label="System Dashboard" />
+          <Tab label="AI Dashboard" />
+        </Tabs>
       </Box>
-      
-      {/* Show rate limit warning if present */}
-      {error?.includes('Rate limit exceeded') && (
-        <Alert severity="warning" sx={{ mb: 2 }}>
-          {error}
-        </Alert>
-      )}
+      <TabPanel value={tabValue} index={0}>
+        <SystemDashboard
+          health={health}
+          recentLogs={recentLogs}
+          errorLogs={errorLogs}
+          authLogs={authLogs}
+          requestMetrics={requestMetrics}
+          locations={locations}
+          items={items}
+          fields={fields}
+          loading={loading}
+          error={error}
+          onRefresh={handleManualRefresh}
+          onAdd={handleAdd}
+          onEdit={handleEdit}
+          onDelete={handleDelete}
+        />
+      </TabPanel>
+      <TabPanel value={tabValue} index={1}>
+        <AIDashboard
+          health={health}
+          metrics={metrics}
+          requestMetrics={requestMetrics}
+          aiRequestMetrics={aiRequestMetrics}
+          locations={locations}
+          performanceInsights={performanceInsights}
+          securityInsights={securityInsights}
+          usageInsights={usageInsights}
+        />
+      </TabPanel>
 
-      {/* System Health Cards */}
-      <Grid container spacing={3}>
-        <Grid item xs={12} md={6} lg={3}>
-          <Card>
-            <CardContent>
-              <Box display="flex" justifyContent="space-between" alignItems="center">
-                <Typography variant="h6">System Status</Typography>
-                {health && getStatusIcon(health.status || 
-                  (health.score >= 80 ? 'healthy' : health.score >= 60 ? 'degraded' : 'critical'))}
-              </Box>
-              <Typography variant="body2" color="text.secondary">
-                Uptime: {health?.uptime 
-                  ? formatDistanceToNow(Date.now() - (health.uptime * 1000)) 
-                  : health?.timestamp 
-                    ? formatDistanceToNow(new Date(health.timestamp)) 
-                    : 'N/A'}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} md={6} lg={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6">CPU Usage</Typography>
-              <Typography variant="h4">
-                {health?.resources?.cpu?.usage 
-                  ? (health.resources.cpu.usage * 100).toFixed(2) 
-                  : health?.cpu?.usage?.toFixed(2)}%
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {health?.cpu?.cores 
-                  ? `${health.cpu.cores} Cores | ${health.cpu.model}` 
-                  : health?.resources?.cpu?.status === 'normal' 
-                    ? 'Status: Normal' 
-                    : health?.resources?.cpu?.status === 'warning' 
-                      ? 'Status: Warning' 
-                      : 'Status: Critical'}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} md={6} lg={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6">Memory</Typography>
-              <Typography variant="h4">
-                {health?.resources?.memory?.usage 
-                  ? (health.resources.memory.usage * 100).toFixed(2) 
-                  : health?.memory?.usage?.toFixed(2)}%
-              </Typography>
-              <Typography variant="body2" color="text.secondary">
-                {health?.memory?.free 
-                  ? `${formatBytes(health.memory.free)} Free` 
-                  : health?.resources?.memory?.status === 'normal' 
-                    ? 'Status: Normal' 
-                    : health?.resources?.memory?.status === 'warning' 
-                      ? 'Status: Warning' 
-                      : 'Status: Critical'}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} md={6} lg={3}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6">Database</Typography>
-              <Box display="flex" alignItems="center" gap={1}>
-                <Chip
-                  label={health?.database?.status || health?.services?.database?.status || 'Unknown'}
-                  color={(health?.database?.status === 'connected' || health?.services?.database?.status === 'up') ? 'success' : 'error'}
-                  size="small"
-                />
-              </Box>
-              <Typography variant="body2" color="text.secondary">
-                {health?.database?.active_connections 
-                  ? `${health.database.active_connections} Active Connections` 
-                  : health?.services?.database?.message || 'Status information unavailable'}
-              </Typography>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Request Metrics Chart */}
-        <Grid item xs={12}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Request Metrics</Typography>
-              <Box height={400}>
-                <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={requestMetrics}>
-                    <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis
-                      dataKey="timestamp"
-                      tickFormatter={(value) => new Date(value).toLocaleTimeString()}
-                    />
-                    <YAxis yAxisId="left" />
-                    <YAxis yAxisId="right" orientation="right" />
-                    <ChartTooltip
-                      content={({ active, payload, label }) => {
-                        if (active && payload && payload.length) {
-                          return (
-                            <Box
-                              sx={{
-                                backgroundColor: 'background.paper',
-                                p: 2,
-                                border: 1,
-                                borderColor: 'divider',
-                                borderRadius: 1,
-                              }}
-                            >
-                              <Typography variant="body2" sx={{ mb: 1 }}>
-                                {new Date(label).toLocaleString()}
-                              </Typography>
-                              {payload.map((entry) => (
-                                <Typography
-                                  key={entry.name}
-                                  variant="body2"
-                                  sx={{ color: entry.color }}
-                                >
-                                  {entry.name || 'Unknown'}: {formatChartValue(entry.name || 'unknown', entry.value)}
-                                </Typography>
-                              ))}
-                            </Box>
-                          );
-                        }
-                        return null;
-                      }}
-                    />
-                    <Legend verticalAlign="top" height={36} />
-                    <Line
-                      yAxisId="left"
-                      type="monotone"
-                      dataKey="requestCount"
-                      name="Total Requests"
-                      stroke="#8884d8"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="left"
-                      type="monotone"
-                      dataKey="successCount"
-                      name="Successful"
-                      stroke="#82ca9d"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="left"
-                      type="monotone"
-                      dataKey="errorCount"
-                      name="Errors"
-                      stroke="#ff7f7f"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                    <Line
-                      yAxisId="right"
-                      type="monotone"
-                      dataKey="averageResponseTime"
-                      name="Avg Response Time"
-                      stroke="#ffc658"
-                      strokeWidth={2}
-                      dot={false}
-                    />
-                  </LineChart>
-                </ResponsiveContainer>
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Live Request Map */}
-        <Grid item xs={12}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Live Request Map</Typography>
-              <Box height={400}>
-                <LiveRequestMap locations={[]} isLoading={loading} />
-              </Box>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        {/* Logs Tables */}
-        <Grid item xs={12} lg={4}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Recent Logs</Typography>
-              <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Time</TableCell>
-                      <TableCell>Level</TableCell>
-                      <TableCell>Message</TableCell>
-                      <TableCell>Location</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {recentLogs.map((log, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{formatDate(log.timestamp)}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={log.level}
-                            size="small"
-                            color={log.level === 'error' ? 'error' : log.level === 'warn' ? 'warning' : 'default'}
-                          />
-                        </TableCell>
-                        <TableCell>{log.message}</TableCell>
-                        <TableCell>
-                          {log.location && (
-                            <Tooltip title={`${log.location.city}, ${log.location.country}`}>
-                              <LocationIcon fontSize="small" />
-                            </Tooltip>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} lg={4}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Error Logs</Typography>
-              <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Time</TableCell>
-                      <TableCell>Error</TableCell>
-                      <TableCell>Location</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {errorLogs.map((log, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{formatDate(log.timestamp)}</TableCell>
-                        <TableCell>
-                          <Tooltip title={log.error && typeof log.error === 'object' && log.error.stack ? log.error.stack : ''}>
-                            <Box>
-                              <Typography variant="body2" color="error">
-                                {typeof log.error === 'object' ? log.error.message : log.error}
-                              </Typography>
-                              {log.metadata && (
-                                <Typography variant="caption" color="text.secondary">
-                                  {JSON.stringify(log.metadata)}
-                                </Typography>
-                              )}
-                            </Box>
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell>
-                          {log.location && (
-                            <Tooltip title={`${log.location.city}, ${log.location.country}`}>
-                              <LocationIcon fontSize="small" />
-                            </Tooltip>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </CardContent>
-          </Card>
-        </Grid>
-
-        <Grid item xs={12} lg={4}>
-          <Card>
-            <CardContent>
-              <Typography variant="h6" gutterBottom>Authentication Logs</Typography>
-              <TableContainer component={Paper} sx={{ maxHeight: 400 }}>
-                <Table size="small" stickyHeader>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Time</TableCell>
-                      <TableCell>Action</TableCell>
-                      <TableCell>User</TableCell>
-                      <TableCell>Location</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {authLogs.map((log, index) => (
-                      <TableRow key={index}>
-                        <TableCell>{formatDate(log.timestamp)}</TableCell>
-                        <TableCell>
-                          <Chip
-                            label={log.action}
-                            size="small"
-                            color={log.action === 'failed_login' ? 'error' : 'success'}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Tooltip title={`User: ${log.user?.email || 'Unknown'}`}>
-                            <Typography variant="body2">{log.user?.id || 'Unknown'}</Typography>
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell>
-                          {log.location && (
-                            <Tooltip title={`${log.location.city}, ${log.location.country}`}>
-                              <LocationIcon fontSize="small" />
-                            </Tooltip>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </CardContent>
-          </Card>
-        </Grid>
-      </Grid>
-    </Container>
+      {/* CRUD Dialog */}
+      <CrudDialog
+        open={isDialogOpen}
+        selectedItem={selectedItem}
+        formData={formData}
+        fields={fields}
+        onClose={() => setIsDialogOpen(false)}
+        onSave={handleSave}
+        onFieldChange={handleFieldChange}
+      />
+    </Box>
   );
 }; 

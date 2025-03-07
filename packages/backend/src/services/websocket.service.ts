@@ -14,6 +14,13 @@ import { LogEntry } from '@admin-ai/shared/src/types/logs';
 import { randomUUID } from 'crypto';
 import jwt from 'jsonwebtoken';
 
+// Add MetricsController interface
+interface MetricsController {
+  getSystemHealth(): Promise<SystemHealth>;
+  getSystemMetrics(): Promise<SystemMetrics>;
+  handleMetricsUpdate(data: any): void;
+}
+
 interface TokenRefreshError extends AppError {
   code: 'TOKEN_REFRESH_REQUIRED';
 }
@@ -35,6 +42,7 @@ export class WebSocketService {
   private recentlyProcessedMessages: Set<string> = new Set();
   private readonly MAX_RECENT_MESSAGES = 100;
   private aiService: AIService | null = null;
+  private metricsController: MetricsController | null = null;
 
   private constructor() {}
 
@@ -623,6 +631,11 @@ export class WebSocketService {
 
   public setAIService(service: AIService): void {
     this.aiService = service;
+  }
+
+  public setMetricsController(controller: MetricsController): void {
+    this.metricsController = controller;
+    logger.info('Metrics controller set in WebSocket service');
   }
 
   // Add this helper function to extract userId from JWT token

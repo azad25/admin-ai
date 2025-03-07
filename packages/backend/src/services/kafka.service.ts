@@ -250,15 +250,59 @@ export class KafkaService {
   }
 
   private async handleSystemMetrics(message: KafkaMessage) {
-    if (!this.wsService) {
-      logger.warn('WebSocket service not initialized, skipping notification');
-      return;
+    try {
+      logger.debug('Received system metrics message from Kafka');
+      
+      // Broadcast to all connected clients
+      this.wsService.broadcast('metrics:update', {
+        health: message.data?.health,
+        metrics: message.data?.metrics
+      });
+      
+      // Also broadcast individual updates for dashboard widgets
+      if (message.data?.health) {
+        this.wsService.broadcast('health_update', message.data.health);
+      }
+      
+      if (message.data?.metrics) {
+        // Extract and broadcast specific metrics for different dashboard widgets
+        const { metrics } = message.data;
+        
+        // Request metrics
+        if (metrics.requests) {
+          this.wsService.broadcast('request_metrics_update', metrics.requests);
+        }
+        
+        // Location data
+        if (metrics.locations) {
+          this.wsService.broadcast('locations_update', metrics.locations);
+        }
+        
+        // Logs
+        if (metrics.logs) {
+          this.wsService.broadcast('logs_update', metrics.logs);
+        }
+        
+        // Error logs
+        if (metrics.errors) {
+          this.wsService.broadcast('error_logs_update', metrics.errors);
+        }
+        
+        // Auth logs
+        if (metrics.authLogs) {
+          this.wsService.broadcast('auth_logs_update', metrics.authLogs);
+        }
+      }
+      
+      // Trigger AI analysis of the metrics
+      if (this.aiService && message.data?.metrics) {
+        const analysis = await this.aiService.analyzeMetrics(message.data.metrics);
+        this.wsService.broadcast('metrics:analysis', analysis);
+      }
+      
+    } catch (error) {
+      logger.error('Error handling system metrics message:', error);
     }
-    this.wsService.broadcast('metrics:update', {
-      health: message.data?.health,
-      metrics: message.data?.metrics,
-      timestamp: message.timestamp
-    });
   }
 
   private async handleErrorLog(message: KafkaMessage) {
@@ -482,6 +526,34 @@ export class KafkaService {
       },
     };
     await this.wsService?.sendToUser(userId, 'ai:message', aiMessage);
+  }
+
+  // Add a method to publish system metrics
+  public async publishSystemMetrics(data: any): Promise<void> {
+    try {
+      await this.publish('system-metrics', {
+        health: data.health,
+        metrics: data.metrics,
+        timestamp: new Date().toISOString()
+      });
+      logger.debug('Published system metrics to Kafka');
+    } catch (error) {
+      logger.error('Failed to publish system metrics to Kafka:', error);
+    }
+  }
+
+  // Add a method to publish dashboard updates
+  public async publishDashboardUpdate(type: string, data: any): Promise<void> {
+    try {
+      await this.publish(`dashboard-${type}`, {
+        type,
+        data,
+        timestamp: new Date().toISOString()
+      });
+      logger.debug(`Published dashboard ${type} update to Kafka`);
+    } catch (error) {
+      logger.error(`Failed to publish dashboard ${type} update to Kafka:`, error);
+    }
   }
 }
 

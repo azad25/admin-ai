@@ -59,4 +59,16 @@ export interface CrudPageConfig {
   sortFields?: string[];
   defaultSort?: { field: string; order: 'asc' | 'desc' };
   itemsPerPage?: number;
+}
+
+export interface CrudField {
+  name: string;
+  type: string;
+  required: boolean;
+}
+
+export interface CrudItem {
+  id: string;
+  pageId: string;
+  [key: string]: any;
 } 

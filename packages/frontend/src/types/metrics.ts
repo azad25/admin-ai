@@ -1,40 +1,72 @@
 export interface SystemHealth {
   status: 'healthy' | 'warning' | 'error';
-  score: number;
-  issues: string[];
+  timestamp: string;
   uptime: number;
-  cpu: {
-    usage: number;
-    cores: number;
-    model: string;
-    speed: number;
+  score: number;
+  resources: {
+    cpu: {
+      usage: number;
+      status: 'normal' | 'warning' | 'critical';
+    };
+    memory: {
+      usage: number;
+      status: 'normal' | 'warning' | 'critical';
+    };
+    disk: {
+      usage: number;
+      status: 'normal' | 'warning' | 'critical';
+    };
   };
-  memory: {
-    total: number;
-    free: number;
-    usage: number;
-  };
-  database: {
-    status: string;
-    active_connections: number;
-    size: number;
-    tables: number;
+  services: {
+    database: ServiceHealth;
+    cache: ServiceHealth;
+    queue: ServiceHealth;
   };
 }
 
+export interface ServiceHealth {
+  status: 'up' | 'down' | 'degraded';
+  lastCheck: string;
+  message?: string;
+}
+
 export interface SystemMetrics {
+  timestamp: string;
   cpuUsage: number;
   memoryUsage: number;
-  activeUsers: number;
   totalRequests: number;
-  averageResponseTime: number;
-  topPaths: Array<{
-    path: string;
-    count: number;
-  }>;
-  locationStats: Record<string, number>;
   errorCount: number;
   warningCount: number;
+  activeUsers: number;
+  averageResponseTime: number;
+  topPaths: string[];
+  locationStats: Record<string, number>;
+}
+
+export interface LogEntry {
+  timestamp: string;
+  level: 'info' | 'warn' | 'error';
+  message: string;
+  metadata?: Record<string, any>;
+}
+
+export interface ErrorLogEntry extends LogEntry {
+  error: Error | string;
+  stack?: string;
+}
+
+export interface AuthLogEntry {
+  timestamp: string;
+  userId: string;
+  action: 'login' | 'logout' | 'failed_login' | 'register';
+  ip: string;
+  userAgent: string;
+  location?: {
+    country: string;
+    city: string;
+    latitude: number;
+    longitude: number;
+  };
 }
 
 export interface RequestMetric {
@@ -64,6 +96,17 @@ export interface RequestLocation {
   city: string;
   country: string;
   uniqueIps: number;
+}
+
+export interface MetricsUpdate {
+  health?: SystemHealth;
+  metrics?: SystemMetrics;
+  logs?: LogEntry[];
+  errorLogs?: ErrorLogEntry[];
+  authLogs?: AuthLogEntry[];
+  requestMetrics?: RequestMetric[];
+  locations?: RequestLocation[];
+  timestamp: string;
 }
 
 export interface PerformanceInsight {

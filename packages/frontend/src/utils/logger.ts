@@ -1,7 +1,7 @@
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 class Logger {
-  private isDevelopment = process.env.NODE_ENV === 'development';
+  private isDevelopment = import.meta.env.DEV || import.meta.env.MODE === 'development';
 
   private log(level: LogLevel, message: string, ...args: any[]) {
     // Skip specific warnings that are expected during normal operation

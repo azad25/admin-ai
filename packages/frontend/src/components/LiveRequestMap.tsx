@@ -1,6 +1,6 @@
-import React, { useRef, useEffect } from 'react';
-import { motion } from 'framer-motion';
-import { Box, Typography, useTheme, alpha } from '@mui/material';
+import React, { useRef, useEffect, useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Box, Typography, useTheme, alpha, CircularProgress } from '@mui/material';
 import { geoPath, geoMercator } from 'd3-geo';
 import { feature } from 'topojson-client';
 import { Feature, Geometry } from 'geojson';
@@ -10,6 +10,8 @@ interface RequestLocation {
   longitude: number;
   count: number;
   status?: 'success' | 'error' | 'warning';
+  city?: string;
+  country?: string;
 }
 
 interface LiveRequestMapProps {
@@ -20,23 +22,68 @@ interface LiveRequestMapProps {
 }
 
 export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
-  locations,
-  isLoading,
+  locations = [],
+  isLoading = false,
   width = 800,
   height = 400,
 }) => {
   const theme = useTheme();
   const mapRef = useRef<SVGSVGElement>(null);
-  const [worldData, setWorldData] = React.useState<Feature<Geometry>[]>([]);
+  const [worldData, setWorldData] = useState<Feature<Geometry>[]>([]);
+  const [animatingPoints, setAnimatingPoints] = useState<RequestLocation[]>([]);
+  const [mapLoading, setMapLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/world-110m.json')
-      .then(response => response.json())
-      .then(topology => {
+    const loadWorldMap = async () => {
+      try {
+        setMapLoading(true);
+        const response = await fetch('https://unpkg.com/world-atlas@2/countries-110m.json');
+        if (!response.ok) throw new Error('Failed to load map data');
+        
+        const topology = await response.json();
         const world = feature(topology, topology.objects.countries);
         setWorldData((world as any).features);
-      });
+        setMapLoading(false);
+      } catch (err) {
+        console.error('Error loading world map:', err);
+        setError('Failed to load world map');
+        setMapLoading(false);
+      }
+    };
+
+    loadWorldMap();
   }, []);
+
+  // Add a new point every few seconds to simulate real-time activity
+  useEffect(() => {
+    if (!locations || locations.length === 0) return;
+
+    const interval = setInterval(() => {
+      const randomIndex = Math.floor(Math.random() * locations.length);
+      const baseLocation = locations[randomIndex];
+      
+      if (!baseLocation) return;
+      
+      const newPoint = {
+        ...baseLocation,
+        latitude: baseLocation.latitude + (Math.random() * 0.2 - 0.1),
+        longitude: baseLocation.longitude + (Math.random() * 0.2 - 0.1),
+        count: Math.max(1, Math.floor(Math.random() * 5)),
+        status: Math.random() > 0.8 
+          ? (Math.random() > 0.5 ? 'warning' : 'error') 
+          : 'success' as 'success' | 'error' | 'warning'
+      };
+      
+      setAnimatingPoints(prev => [...prev, newPoint]);
+      
+      setTimeout(() => {
+        setAnimatingPoints(prev => prev.filter(p => p !== newPoint));
+      }, 3000);
+    }, 1000);
+    
+    return () => clearInterval(interval);
+  }, [locations]);
 
   const projection = geoMercator()
     .scale((width * 0.9) / (2 * Math.PI))
@@ -57,6 +104,45 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
     }
   };
 
+  if (mapLoading || isLoading) {
+    return (
+      <Box
+        sx={{
+          width,
+          height,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: alpha(theme.palette.background.paper, 0.8),
+          borderRadius: theme.shape.borderRadius,
+        }}
+      >
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  if (error) {
+    return (
+      <Box
+        sx={{
+          width,
+          height,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          bgcolor: alpha(theme.palette.error.main, 0.1),
+          borderRadius: theme.shape.borderRadius,
+          p: 2,
+        }}
+      >
+        <Typography color="error">{error}</Typography>
+      </Box>
+    );
+  }
+
+  const safeLocations = Array.isArray(locations) ? locations : [];
+
   return (
     <Box
       sx={{
@@ -64,6 +150,9 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
         width,
         height,
         overflow: 'hidden',
+        borderRadius: theme.shape.borderRadius,
+        boxShadow: theme.shadows[3],
+        bgcolor: alpha(theme.palette.background.paper, 0.8),
       }}
     >
       <svg
@@ -71,10 +160,6 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
         width={width}
         height={height}
         viewBox={`0 0 ${width} ${height}`}
-        style={{
-          background: alpha(theme.palette.background.paper, 0.5),
-          borderRadius: theme.shape.borderRadius,
-        }}
       >
         {/* Map background */}
         <g>
@@ -83,7 +168,7 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
               key={i}
               d={path(d) || ''}
               fill={alpha(theme.palette.primary.main, 0.1)}
-              stroke={alpha(theme.palette.primary.main, 0.2)}
+              stroke={alpha(theme.palette.primary.main, 0.3)}
               strokeWidth={0.5}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -92,17 +177,17 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
           ))}
         </g>
 
-        {/* Request points */}
+        {/* Static request points */}
         <g>
-          {locations.map((point, i) => {
+          {safeLocations.map((point, i) => {
             const [x, y] = projection([point.longitude, point.latitude]) || [0, 0];
             const statusColor = getStatusColor(point.status);
 
             return (
-              <g key={i} transform={`translate(${x},${y})`}>
+              <g key={`static-${i}`} transform={`translate(${x},${y})`}>
                 {/* Pulse effect */}
                 <motion.circle
-                  r={Math.min(20, Math.max(5, point.count / 10))}
+                  r={Math.min(20, Math.max(5, point.count))}
                   fill={alpha(statusColor, 0.1)}
                   initial={{ scale: 0.5, opacity: 0.8 }}
                   animate={{
@@ -118,7 +203,7 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
 
                 {/* Main point */}
                 <motion.circle
-                  r={Math.min(10, Math.max(3, point.count / 20))}
+                  r={Math.min(10, Math.max(3, point.count / 2))}
                   fill={statusColor}
                   initial={{ scale: 0, opacity: 0 }}
                   animate={{ scale: 1, opacity: 0.8 }}
@@ -129,24 +214,58 @@ export const LiveRequestMap: React.FC<LiveRequestMapProps> = ({
                     delay: i * 0.1,
                   }}
                 />
+                
+                {/* City label */}
+                {point.city && (
+                  <text
+                    x={0}
+                    y={-12}
+                    textAnchor="middle"
+                    fill={theme.palette.text.primary}
+                    fontSize={10}
+                    fontWeight="bold"
+                  >
+                    {point.city}
+                  </text>
+                )}
               </g>
             );
           })}
         </g>
+        
+        {/* Animating points */}
+        <AnimatePresence>
+          {animatingPoints.map((point, i) => {
+            const [x, y] = projection([point.longitude, point.latitude]) || [0, 0];
+            const statusColor = getStatusColor(point.status);
 
-        {/* Map overlay gradient */}
-        <defs>
-          <radialGradient id="mapGradient">
-            <stop offset="0%" stopColor={alpha(theme.palette.primary.main, 0.1)} />
-            <stop offset="100%" stopColor={alpha(theme.palette.primary.main, 0)} />
-          </radialGradient>
-        </defs>
-        <rect
-          width={width}
-          height={height}
-          fill="url(#mapGradient)"
-          style={{ mixBlendMode: 'overlay' }}
-        />
+            return (
+              <g key={`anim-${i}-${Date.now()}`} transform={`translate(${x},${y})`}>
+                {/* Ripple effect */}
+                <motion.circle
+                  r={Math.min(30, Math.max(10, point.count * 2))}
+                  fill="none"
+                  stroke={statusColor}
+                  strokeWidth={2}
+                  initial={{ scale: 0, opacity: 0.8 }}
+                  animate={{ scale: 2, opacity: 0 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 2, ease: 'easeOut' }}
+                />
+                
+                {/* Flash point */}
+                <motion.circle
+                  r={Math.min(8, Math.max(4, point.count))}
+                  fill={statusColor}
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: [0, 1.5, 1], opacity: [0, 1, 0.7] }}
+                  exit={{ scale: 0, opacity: 0 }}
+                  transition={{ duration: 2, ease: 'easeOut' }}
+                />
+              </g>
+            );
+          })}
+        </AnimatePresence>
       </svg>
 
       {/* Legend */}

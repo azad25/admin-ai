@@ -74,15 +74,13 @@ export const Layout: React.FC = () => {
   const menuItems: MenuItem[] = [
     { text: 'Home', icon: <HomeIcon />, path: '/home' },
     { text: 'Dashboard', icon: <DashboardIcon />, path: '/dashboard' },
-    { text: 'AI Dashboard', icon: <AIIcon />, path: '/ai' },
     { divider: true },
     { text: 'CRUD Pages', icon: <StorageIcon />, path: '/crud' },
     { text: 'API Keys', icon: <KeyIcon />, path: '/api-keys' },
     { divider: true },
     { text: 'AI Settings', icon: <SettingsIcon />, path: '/ai/settings' },
     { text: 'Settings', icon: <SettingsIcon />, path: '/settings' },
-    { divider: true },
-    { text: 'WebSocket Test', icon: <SettingsInputComponentIcon />, path: '/websocket-test' }
+    { divider: true }
   ];
 
   const handleNavigation = (path: string) => {

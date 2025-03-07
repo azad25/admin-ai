@@ -47,6 +47,9 @@ export function createMetricsRoutes(wsService: WebSocketService) {
   const router = Router();
   const aiService = new AIService();
   const metricsController = new MetricsController(aiService, wsService);
+  
+  // Set the metrics controller in the WebSocket service
+  wsService.setMetricsController(metricsController);
 
   // Health endpoint should be public (no auth required)
   router.get('/health', 
