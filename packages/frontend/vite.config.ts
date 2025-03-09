@@ -50,6 +50,7 @@ export default defineConfig({
     }
   },
   optimizeDeps: {
-    include: ['react', 'react-dom', 'three']
+    include: ['react', 'react-dom', 'three'],
+    exclude: ['@react-three/fiber', '@react-three/drei']
   }
 }); 

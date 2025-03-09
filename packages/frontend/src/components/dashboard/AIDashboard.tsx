@@ -19,7 +19,8 @@ import { AIGlobe } from '../3d/AIGlobe';
 import { AIActivityTimeline, ActivityData } from '../AIActivityTimeline';
 import { SystemHealth, RequestMetric, RequestLocation } from '../../services/systemMetrics.service';
 import { SystemMetrics, PerformanceInsight, SecurityInsight, UsageInsight } from '../../types/metrics';
-import { socket } from '../../services/socket';
+import { useSocket } from '../../hooks';
+import { wsService } from '../../services/websocket.service';
 
 interface AIDashboardProps {
   health: SystemHealth | null;
@@ -153,7 +154,7 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
   // Setup WebSocket listeners for real-time updates
   useEffect(() => {
     // Check connection status
-    setIsConnected(socket.connected);
+    setIsConnected(wsService.isConnected());
 
     // Listen for connection events
     const onConnect = () => {
@@ -186,18 +187,18 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
       }
     };
 
-    socket.on('connect', onConnect);
-    socket.on('disconnect', onDisconnect);
-    socket.on('ai:status', onAiStatus);
-    socket.on('ai:analysis', onAiAnalysis);
-    socket.on('ai:performance_insights', onPerformanceInsights);
+    wsService.on('connect', onConnect);
+    wsService.on('disconnect', onDisconnect);
+    wsService.on('ai:status', onAiStatus);
+    wsService.on('ai:analysis', onAiAnalysis);
+    wsService.on('ai:performance_insights', onPerformanceInsights);
 
     return () => {
-      socket.off('connect', onConnect);
-      socket.off('disconnect', onDisconnect);
-      socket.off('ai:status', onAiStatus);
-      socket.off('ai:analysis', onAiAnalysis);
-      socket.off('ai:performance_insights', onPerformanceInsights);
+      wsService.off('connect', onConnect);
+      wsService.off('disconnect', onDisconnect);
+      wsService.off('ai:status', onAiStatus);
+      wsService.off('ai:analysis', onAiAnalysis);
+      wsService.off('ai:performance_insights', onPerformanceInsights);
     };
   }, []);
 
@@ -843,28 +844,49 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
         {/* Global Request Distribution */}
         <Grid item xs={12} md={6}>
           <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.7, delay: 0.5 }}
+            initial="initial"
+            animate="animate"
+            whileHover="hover"
+            variants={cardVariants}
           >
-            <Paper elevation={3} sx={{ p: 2, borderRadius: 2 }}>
-              <Box display="flex" alignItems="center" mb={2}>
-                <motion.div
-                  initial="initial"
-                  animate="animate"
-                  variants={iconVariants}
-                  whileHover="pulse"
-                >
-                  <InsightsIcon sx={{ mr: 1, color: theme.palette.primary.main, fontSize: 28 }} />
-                </motion.div>
-                <Typography variant="h6">Global AI Activity</Typography>
-              </Box>
-              <AIGlobe data={globeData} />
-              <Box mt={1} px={2}>
-                <Typography variant="caption" color="text.secondary">
-                  Visualizing real-time AI request distribution across the globe. Each point represents user activity.
+            <Paper 
+              elevation={3} 
+              sx={{ 
+                p: 2, 
+                borderRadius: 2, 
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                position: 'relative',
+                overflow: 'hidden'
+              }}
+            >
+              <Box sx={{ position: 'absolute', top: 0, left: 0, width: '100%', p: 2, zIndex: 2 }}>
+                <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', color: 'primary.main' }}>
+                  <SignalIcon sx={{ mr: 1 }} /> Global AI Activity
                 </Typography>
               </Box>
+              
+              <Box sx={{ flex: 1, mt: 4, position: 'relative' }}>
+                <AIGlobe 
+                  data={locations.map(loc => ({
+                    latitude: loc.latitude,
+                    longitude: loc.longitude,
+                    intensity: loc.count / 100,
+                    city: loc.city,
+                    country: loc.country
+                  }))} 
+                  size={350}
+                  showCountries={true}
+                  showGrid={true}
+                  showRing={true}
+                  showOuterGrid={true}
+                />
+              </Box>
+              
+              <Typography variant="caption" sx={{ textAlign: 'center', mt: 1, color: 'text.secondary' }}>
+                Visualizing real-time AI request distribution across the globe. Each point represents user activity.
+              </Typography>
             </Paper>
           </motion.div>
         </Grid>

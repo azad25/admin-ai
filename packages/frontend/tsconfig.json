@@ -25,7 +25,8 @@
     "paths": {
       "@admin-ai/shared": ["../shared/src"],
       "@admin-ai/shared/*": ["../shared/src/*"]
-    }
+    },
+    "typeRoots": ["./node_modules/@types", "./src/types"]
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]

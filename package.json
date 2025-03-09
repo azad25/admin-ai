@@ -11,7 +11,7 @@
     "test": "yarn workspaces run test",
     "lint": "yarn workspaces run lint",
     "clean": "yarn workspaces run clean",
-    "postinstall": "yarn workspace @admin-ai/shared build"
+    "postinstall": "yarn workspace @admin-ai/shared build && patch-package"
   },
   "devDependencies": {
     "@types/node": "^20.11.17",
@@ -20,6 +20,7 @@
     "@typescript-eslint/parser": "^8.25.0",
     "concurrently": "^8.2.2",
     "eslint": "^9.21.0",
+    "patch-package": "^8.0.0",
     "typescript": "^5.3.3"
   },
   "resolutions": {
@@ -28,6 +29,12 @@
     "@types/react": "18.2.55",
     "@types/react-dom": "18.2.19",
     "three": "0.161.0",
-    "@types/three": "0.161.2"
+    "@types/three": "0.161.2",
+    "@types/react-reconciler": "0.26.7"
+  },
+  "dependencies": {
+    "@react-three/drei": "^9.80.0",
+    "@react-three/fiber": "^8.13.0",
+    "three": "^0.161.0"
   }
 }

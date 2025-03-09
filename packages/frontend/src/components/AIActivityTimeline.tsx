@@ -51,6 +51,9 @@ interface AIActivityTimelineProps {
   data: ActivityData[];
 }
 
+// Define valid color types for MUI components
+type SeverityColorType = 'error' | 'warning' | 'success' | 'info' | 'primary' | 'secondary' | 'default';
+
 // Get icon based on activity type
 const getActivityIcon = (path: string, statusCode: number) => {
   if (statusCode >= 400) {
@@ -101,12 +104,29 @@ const getActivityType = (path: string) => {
   return 'API Request';
 };
 
-// Get severity color
-const getSeverityColor = (statusCode: number, duration: number) => {
+// Get severity color and its corresponding palette color
+const getSeverityColor = (statusCode: number, duration: number): SeverityColorType => {
   if (statusCode >= 500) return 'error';
   if (statusCode >= 400) return 'warning';
   if (duration > 1000) return 'warning';
   return 'success';
+};
+
+// Get the actual color value from the theme palette
+const getSeverityColorValue = (theme: any, statusCode: number, duration: number): string => {
+  const colorType = getSeverityColor(statusCode, duration);
+  switch (colorType) {
+    case 'error':
+      return theme.palette.error.main;
+    case 'warning':
+      return theme.palette.warning.main;
+    case 'success':
+      return theme.palette.success.main;
+    case 'info':
+      return theme.palette.info.main;
+    default:
+      return theme.palette.primary.main;
+  }
 };
 
 export const AIActivityTimeline: React.FC<AIActivityTimelineProps> = ({ data }) => {
@@ -187,7 +207,7 @@ export const AIActivityTimeline: React.FC<AIActivityTimelineProps> = ({ data }) 
             >
               <ListItem
                 sx={{
-                  borderLeft: `4px solid ${theme.palette[getSeverityColor(metric.statusCode, metric.duration)].main}`,
+                  borderLeft: `4px solid ${getSeverityColorValue(theme, metric.statusCode, metric.duration)}`,
                   mb: 1,
                   backgroundColor: theme.palette.background.default,
                   borderRadius: '0 8px 8px 0',
@@ -201,63 +221,66 @@ export const AIActivityTimeline: React.FC<AIActivityTimelineProps> = ({ data }) 
                 <ListItemIcon>
                   {getActivityIcon(metric.path, metric.statusCode)}
                 </ListItemIcon>
-                <ListItemText
-                  primary={
-                    <Box display="flex" justifyContent="space-between" alignItems="center">
-                      <Typography variant="subtitle2" fontWeight="medium">
-                        {getActivityType(metric.path)}
-                      </Typography>
-                      <Chip
-                        size="small"
-                        label={`${metric.statusCode}`}
-                        color={getSeverityColor(metric.statusCode, metric.duration)}
-                        variant="outlined"
-                      />
+                
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  <Box display="flex" justifyContent="space-between" alignItems="center">
+                    <Typography variant="subtitle2" fontWeight="medium">
+                      {getActivityType(metric.path)}
+                    </Typography>
+                    <Chip
+                      size="small"
+                      label={`${metric.statusCode}`}
+                      color={getSeverityColor(metric.statusCode, metric.duration)}
+                      variant="outlined"
+                    />
+                  </Box>
+                  
+                  <Typography variant="caption" color="textSecondary" display="block">
+                    {metric.method} {metric.path}
+                  </Typography>
+                  
+                  <Box display="flex" alignItems="center" mt={0.5}>
+                    <Box sx={{ mr: 1 }}>
+                      <Tooltip title="Response time" placement="top">
+                        <Chip
+                          size="small"
+                          label={`${metric.duration}ms`}
+                          variant="outlined"
+                          sx={{ height: 20 }}
+                        />
+                      </Tooltip>
                     </Box>
-                  }
-                  secondary={
-                    <>
-                      <Typography variant="caption" color="textSecondary" display="block">
-                        {metric.method} {metric.path}
+                    <Typography variant="caption" color="textSecondary">
+                      {formatDistanceToNow(new Date(metric.timestamp))} ago
+                    </Typography>
+                  </Box>
+                  
+                  {metric.location && (
+                    <Box display="flex" alignItems="center" mt={0.5}>
+                      <Avatar
+                        sx={{ width: 16, height: 16, mr: 1, fontSize: '0.6rem' }}
+                      >
+                        {metric.location.country.substring(0, 2)}
+                      </Avatar>
+                      <Typography variant="caption" color="textSecondary">
+                        {metric.location.city}, {metric.location.country}
                       </Typography>
-                      <Box display="flex" alignItems="center" mt={0.5}>
-                        <Tooltip title="Response time">
-                          <Chip
-                            size="small"
-                            label={`${metric.duration}ms`}
-                            variant="outlined"
-                            sx={{ mr: 1, height: 20 }}
-                          />
-                        </Tooltip>
-                        <Typography variant="caption" color="textSecondary">
-                          {formatDistanceToNow(new Date(metric.timestamp))} ago
-                        </Typography>
-                      </Box>
-                      {metric.location && (
-                        <Box display="flex" alignItems="center" mt={0.5}>
-                          <Avatar
-                            sx={{ width: 16, height: 16, mr: 1, fontSize: '0.6rem' }}
-                          >
-                            {metric.location.country.substring(0, 2)}
-                          </Avatar>
-                          <Typography variant="caption" color="textSecondary">
-                            {metric.location.city}, {metric.location.country}
-                          </Typography>
-                        </Box>
-                      )}
-                      <Box mt={1}>
-                        <Tooltip title={`Response time: ${metric.duration}ms`}>
-                          <LinearProgress
-                            variant="determinate"
-                            value={Math.min(100, (metric.duration / 1000) * 100)}
-                            color={metric.duration > 1000 ? "warning" : "primary"}
-                            sx={{ height: 3, borderRadius: 5 }}
-                          />
-                        </Tooltip>
-                      </Box>
-                    </>
-                  }
-                />
+                    </Box>
+                  )}
+                  
+                  <Box mt={1}>
+                    <Tooltip title={`Response time: ${metric.duration}ms`}>
+                      <div>
+                        <LinearProgress
+                          variant="determinate"
+                          value={Math.min(100, (metric.duration / 1000) * 100)}
+                          color={metric.duration > 1000 ? "warning" : "primary"}
+                          sx={{ height: 3, borderRadius: 5 }}
+                        />
+                      </div>
+                    </Tooltip>
+                  </Box>
+                </Box>
               </ListItem>
               {index < activityData.length - 1 && <Divider variant="inset" component="li" />}
             </motion.div>
