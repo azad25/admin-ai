@@ -78,4 +78,28 @@ export interface WebSocketEvents {
     metrics: SystemMetrics;
     timestamp: string;
   };
-} 
+
+  // Globe visualization events
+  'globe:locations': {
+    locations: Array<{
+      ip: string;
+      latitude: number;
+      longitude: number;
+      city: string;
+      country: string;
+      count: number;
+      lastSeen: string;
+    }>;
+    timestamp: string;
+  };
+  'globe:location:new': {
+    location: {
+      ip: string;
+      latitude: number;
+      longitude: number;
+      city: string;
+      country: string;
+      timestamp: string;
+    };
+  };
+}

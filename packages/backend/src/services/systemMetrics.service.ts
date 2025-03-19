@@ -96,7 +96,7 @@ interface SystemNotification {
 }
 
 interface ServiceHealth {
-  status: 'up' | 'down' | 'degraded' | 'unknown';
+  status: 'up' | 'down' | 'degraded';
   lastCheck: string;
   message?: string;
 }
@@ -113,6 +113,13 @@ export class SystemMetricsService extends EventEmitter {
   private wsService: WebSocketService | null = null;
   private aiService: AIService | null = null;
   private aiSettingsService?: AISettingsService;
+  private startMetricsCollection(): void {
+    logger.info('Starting metrics collection');
+    // Initialize metrics collection
+    this.collectAndPublishMetrics().catch(error => {
+      logger.error('Failed to collect and publish initial metrics:', error);
+    });
+  }
   private metricsInterval: NodeJS.Timeout | null = null;
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private metricsRepository!: Repository<DBSystemMetrics>;
@@ -131,6 +138,113 @@ export class SystemMetricsService extends EventEmitter {
     super();
     this.startTime = Date.now();
     this.cacheService = CacheService.getInstance();
+    this.locationBroadcastInterval = null;
+  }
+
+  private locationBroadcastInterval: NodeJS.Timeout | null;
+
+  private async startLocationBroadcast(): Promise<void> {
+    if (this.locationBroadcastInterval) {
+      return;
+    }
+
+    this.locationBroadcastInterval = setInterval(async () => {
+      try {
+        const locations = await this.getRecentLocations();
+        if (this.wsService && locations.length > 0) {
+          this.wsService.broadcast('globe:locations', {
+            locations,
+            timestamp: new Date().toISOString()
+          });
+        }
+      } catch (error) {
+        logger.error('Error broadcasting locations:', error);
+      }
+    }, 10000); // Broadcast every 10 seconds
+  }
+
+  private async getRecentLocations(): Promise<Array<{
+    ip: string;
+    latitude: number;
+    longitude: number;
+    city: string;
+    country: string;
+    count: number;
+    lastSeen: string;
+  }>> {
+    try {
+      const locations = await this.locationRepository
+        .createQueryBuilder('location')
+        .select([
+          'location.ip',
+          'location.latitude',
+          'location.longitude',
+          'location.city',
+          'location.country',
+          'COUNT(location.ip) as count',
+          'MAX(location.timestamp) as lastSeen'
+        ])
+        .where('location.timestamp > :cutoff', {
+          cutoff: new Date(Date.now() - 24 * 60 * 60 * 1000) // Last 24 hours
+        })
+        .groupBy('location.ip')
+        .addGroupBy('location.latitude')
+        .addGroupBy('location.longitude')
+        .addGroupBy('location.city')
+        .addGroupBy('location.country')
+        .getRawMany();
+
+      return locations.map(loc => ({
+        ip: loc.location_ip,
+        latitude: parseFloat(loc.location_latitude),
+        longitude: parseFloat(loc.location_longitude),
+        city: loc.location_city,
+        country: loc.location_country,
+        count: parseInt(loc.count),
+        lastSeen: new Date(loc.lastSeen).toISOString()
+      }));
+    } catch (error) {
+      logger.error('Error fetching recent locations:', error);
+      return [];
+    }
+  }
+
+  public async trackLocation(location: {
+    ip: string;
+    latitude: number;
+    longitude: number;
+    city: string;
+    country: string;
+    method: string;
+    path: string;
+    statusCode: number;
+    duration: number;
+    userId?: string;
+  }): Promise<void> {
+    try {
+      const requestLocation = this.locationRepository.create({
+        ...location,
+        timestamp: new Date(),
+        requestId: uuidv4()
+      });
+
+      await this.locationRepository.save(requestLocation);
+
+      if (this.wsService) {
+        this.wsService.broadcast('globe:location:new', {
+          location: {
+            ip: location.ip,
+            latitude: location.latitude,
+            longitude: location.longitude,
+            city: location.city,
+            country: location.country,
+            timestamp: new Date().toISOString()
+          }
+        });
+      }
+    } catch (error) {
+      logger.error('Error tracking location:', error);
+    }
   }
 
   public static getInstance(): SystemMetricsService {
@@ -140,7 +254,7 @@ export class SystemMetricsService extends EventEmitter {
     return SystemMetricsService.instance;
   }
 
-  public async initializeServices(wsService: WebSocketService, aiService?: AIService): Promise<void> {
+  public async initializeServices(wsService: WebSocketService, aiService: AIService | null = null): Promise<void> {
     if (this.isInitialized) {
       logger.info('System metrics service already initialized');
       return;
@@ -224,6 +338,12 @@ export class SystemMetricsService extends EventEmitter {
   }
 
   private async startCollectingMetrics(): Promise<void> {
+    // Start collecting metrics
+    this.startMetricsCollection();
+    
+    // Start location broadcast
+    this.startLocationBroadcast();
+
     this.metricsInterval = setInterval(() => {
       this.collectAndPublishMetrics().catch(error => {
         logger.error('Failed to collect and publish system metrics:', error);
@@ -305,15 +425,20 @@ export class SystemMetricsService extends EventEmitter {
       if (this.wsService) {
         this.wsService.broadcast('metrics:update', {
           health: responseHealth,
-          metrics: completeMetrics
+          metrics: completeMetrics,
+          timestamp: new Date().toISOString()
         });
         
-        this.wsService.broadcast('health_update', responseHealth);
-        this.wsService.broadcast('logs_update', recentLogs);
-        this.wsService.broadcast('error_logs_update', errorLogs);
-        this.wsService.broadcast('auth_logs_update', authLogs);
-        this.wsService.broadcast('request_metrics_update', requestMetrics);
-        this.wsService.broadcast('locations_update', locations);
+        this.wsService.broadcast('metrics:status', {
+          health: responseHealth,
+          metrics: completeMetrics,
+          timestamp: new Date().toISOString()
+        });
+        this.wsService.broadcast('metrics:update', {
+          health: responseHealth,
+          metrics: completeMetrics,
+          timestamp: new Date().toISOString()
+        });
       }
       
       logger.debug('Collected and published metrics data');
@@ -322,7 +447,7 @@ export class SystemMetricsService extends EventEmitter {
     }
   }
 
-  private async getDatabaseHealth(): Promise<ServiceHealth> {
+  private async getDatabaseHealth(): Promise<{ status: 'up' | 'down' | 'degraded'; lastCheck: string; message?: string; }> {
     try {
       // Check database connection
       await this.metricsRepository.query('SELECT 1');
@@ -343,7 +468,7 @@ export class SystemMetricsService extends EventEmitter {
   private async getCacheHealth(): Promise<ServiceHealth> {
     try {
       // Check cache connection
-      const isConnected = await this.cacheService.isConnected();
+      const isConnected = await this.cacheService.isReady();
       if (isConnected) {
         return {
           status: 'up',
@@ -376,7 +501,7 @@ export class SystemMetricsService extends EventEmitter {
         };
       }
       return {
-        status: 'unknown',
+        status: 'down',
         lastCheck: new Date().toISOString(),
         message: 'Queue service not configured'
       };
@@ -414,9 +539,7 @@ export class SystemMetricsService extends EventEmitter {
       }
 
       const health: SystemHealth = {
-        status,
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
         score: healthScore,
         resources: {
           cpu: {
@@ -443,9 +566,7 @@ export class SystemMetricsService extends EventEmitter {
     } catch (error: any) {
       logger.error('Failed to get system health:', error);
       return {
-        status: 'error',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
         score: 0,
         resources: {
           cpu: { usage: 0, status: 'critical' },
@@ -640,11 +761,11 @@ export class SystemMetricsService extends EventEmitter {
     return this.authLogs;
   }
 
-  public async getRecentLogs(): Promise<LogEntry[]> {
+  public async getRecentLogs(): Promise<BaseLog[]> {
     try {
       // Return the most recent logs from the database or in-memory storage
       // This is a simplified implementation - in a real system, you would query your log storage
-      const logs: LogEntry[] = this.requestMetrics.map(metric => ({
+      const logs: BaseLog[] = this.requestMetrics.map(metric => ({
         timestamp: metric.timestamp,
         level: metric.statusCode >= 400 ? 'error' : 'info',
         message: `${metric.method} ${metric.path} ${metric.statusCode}`,

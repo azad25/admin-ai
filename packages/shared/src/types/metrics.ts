@@ -2,6 +2,7 @@ import type { ResourceStatus } from './ai.js';
 
 export interface SystemHealth {
   timestamp: string;
+  score: number;
   services: {
     [key: string]: {
       status: 'up' | 'down' | 'degraded';
@@ -48,4 +49,4 @@ export interface SystemMetrics {
     usage: number;
     status: 'critical' | 'warning' | 'normal';
   };
-} 
+}

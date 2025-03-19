@@ -2,27 +2,25 @@ import api from './api';
 
 // Define the SystemHealth interface locally since the shared type might not be available
 export interface SystemHealth {
-  // New format
-  timestamp?: string;
-  score?: number;
-  status?: string;
-  services?: {
+  timestamp: string;
+  score: number;
+  services: {
     [key: string]: {
       status: 'up' | 'down' | 'degraded';
       lastCheck: string;
       message?: string;
     };
   };
-  resources?: {
-    cpu?: {
+  resources: {
+    cpu: {
       usage: number;
       status: 'critical' | 'warning' | 'normal';
     };
-    memory?: {
+    memory: {
       usage: number;
       status: 'critical' | 'warning' | 'normal';
     };
-    disk?: {
+    disk: {
       usage: number;
       status: 'critical' | 'warning' | 'normal';
     };
@@ -153,4 +151,4 @@ export class SystemMetricsService {
   }
 }
 
-export const systemMetricsService = SystemMetricsService.getInstance(); 
+export const systemMetricsService = SystemMetricsService.getInstance();

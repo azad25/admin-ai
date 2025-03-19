@@ -7,7 +7,7 @@ node_modules/
 dist/
 build/
 *.tsbuildinfo
-
+context/
 # Environment variables
 .env
 .env.local

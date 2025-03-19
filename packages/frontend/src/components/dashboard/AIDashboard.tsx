@@ -15,7 +15,7 @@ import { motion } from 'framer-motion';
 import { SystemHealthGauge } from '../SystemHealthGauge';
 import { AnimatedMetricsCard } from '../AnimatedMetricsCard';
 import { ErrorAnalysis } from '../ErrorAnalysis';
-import { AIGlobe } from '../3d/AIGlobe';
+import AIGlobe from '../3d/aiglobe/index';
 import { AIActivityTimeline, ActivityData } from '../AIActivityTimeline';
 import { SystemHealth, RequestMetric, RequestLocation } from '../../services/systemMetrics.service';
 import { SystemMetrics, PerformanceInsight, SecurityInsight, UsageInsight } from '../../types/metrics';
