@@ -151,7 +151,7 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
     const interval = setInterval(() => {
       if (data.length >= 2) {
         // Create more flows at once to match dense network in reference
-        for (let i = 0; i < 3; i++) {
+        for (let i = 0; i < 5; i++) {
           const startIdx = Math.floor(Math.random() * data.length);
           let endIdx;
           do {
@@ -209,12 +209,12 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
     return () => clearInterval(interval);
   }, [data, size, scene]);
 
-  // Updated glow material with stronger blue emission to match reference
+  // Enhanced glow material with stronger blue emission and more dynamic effects to match reference
   const glowMaterial = new THREE.ShaderMaterial({
     uniforms: {
-      c: { value: 0.1 }, // Lower core value for stronger outer glow
-      p: { value: 2.5 }, // Adjusted power for softer falloff
-      glowColor: { value: new THREE.Color(0x0a75ff) }, // Brighter blue for atmospheric glow
+      c: { value: 0.06 }, // Even lower core value for stronger outer glow
+      p: { value: 3.0 }, // Increased power for softer falloff
+      glowColor: { value: new THREE.Color(0x0044cc) }, // Deeper blue for atmospheric glow to match reference
       viewVector: { value: new THREE.Vector3(0, 0, 0) },
       time: { value: 0.0 }
     },
@@ -229,8 +229,9 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
         vec3 vNormal = normalize(normalMatrix * normal);
         vec3 vNormel = normalize(normalMatrix * viewVector);
         intensity = pow(c - dot(vNormal, vNormel), p);
-        // Add subtle wave effect to the glow
-        float displacement = sin(position.x * 5.0 + time) * sin(position.y * 5.0 + time) * 0.01;
+        // Add more pronounced wave effect to the glow
+        float displacement = sin(position.x * 6.0 + time) * sin(position.y * 6.0 + time) * 0.015;
+        displacement += cos(position.z * 4.0 + time * 0.7) * 0.005; // Additional wave pattern
         vec3 newPosition = position + normal * displacement;
         vPosition = position;
         gl_Position = projectionMatrix * modelViewMatrix * vec4(newPosition, 1.0);
@@ -242,12 +243,15 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
       varying float intensity;
       varying vec3 vPosition;
       void main() {
-        // Add subtle color variation based on position
-        vec3 adjustedColor = glowColor + vec3(sin(vPosition.x * 5.0 + time * 0.5) * 0.05,
-                                             sin(vPosition.y * 5.0 + time * 0.5) * 0.05,
-                                             sin(vPosition.z * 5.0 + time * 0.5) * 0.1);
-        vec3 glow = adjustedColor * intensity;
-        gl_FragColor = vec4(glow, intensity * 0.9); // Higher alpha for stronger glow
+        // Add more pronounced color variation based on position
+        vec3 adjustedColor = glowColor + vec3(sin(vPosition.x * 6.0 + time * 0.5) * 0.08,
+                                             sin(vPosition.y * 6.0 + time * 0.5) * 0.06,
+                                             sin(vPosition.z * 6.0 + time * 0.5) * 0.15);
+        // Add pulsing effect
+        float pulse = 0.95 + 0.05 * sin(time * 0.8);
+        vec3 glow = adjustedColor * intensity * pulse;
+        // Stronger glow with better falloff
+        gl_FragColor = vec4(glow, intensity * intensity * 0.95); // Quadratic falloff for more defined edge
       }
     `,
     side: THREE.BackSide,
@@ -256,17 +260,17 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
     depthWrite: false
   });
 
-  // Create darker Earth material with visible grid lines to match reference
+  // Enhanced Earth material with deeper blues and more futuristic appearance to match reference image
   const earthMaterial = new THREE.MeshPhongMaterial({
     map: earthTexture,
     bumpMap: bumpTexture,
-    bumpScale: 0.03, // Reduced bump scale for smoother appearance
+    bumpScale: 0.01, // Further reduced bump scale for smoother, more stylized appearance like in reference
     specularMap: specularTexture,
-    specular: new THREE.Color(0x333333), // Reduced specular highlights
-    shininess: 10, // Reduced shininess for darker appearance
-    emissive: new THREE.Color(0x0550c0), // Stronger blue emissive to match reference
+    specular: new THREE.Color(0x1a1a66), // Darker blue-tinted specular highlights
+    shininess: 6, // Reduced shininess for more matte appearance like in reference
+    emissive: new THREE.Color(0x002288), // Deeper blue emissive to match reference image
     emissiveMap: nightLightsTexture,
-    emissiveIntensity: 2.0, // Increased intensity for stronger glow effect
+    emissiveIntensity: 3.0, // Increased intensity for stronger glow effect to match reference
   });
 
   // Darker fallback material
@@ -320,10 +324,11 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
   const globeGeometry = new THREE.SphereGeometry(size, 64, 64);
   const gridGeometry = new THREE.SphereGeometry(size * 1.001, 36, 36);
 
-  // Create grid material for latitude/longitude lines
+  // Enhanced grid material for more prominent latitude/longitude lines with futuristic appearance
   const gridMaterial = new THREE.ShaderMaterial({
     uniforms: {
-      color: { value: new THREE.Color(0x0a75ff) },
+      color: { value: new THREE.Color(0x0088ff) },
+      highlightColor: { value: new THREE.Color(0x55aaff) },
       time: { value: 0.0 }
     },
     vertexShader: `
@@ -335,30 +340,61 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
     `,
     fragmentShader: `
       uniform vec3 color;
+      uniform vec3 highlightColor;
       uniform float time;
       varying vec3 vPosition;
+      
       float grid(vec3 pos, float scale) {
         // Convert to spherical coordinates
         float r = length(pos);
         float theta = acos(pos.y / r);
         float phi = atan(pos.z, pos.x);
-        // Grid lines
-        float lat = abs(fract(theta * 8.0 / 3.14159) - 0.5);
-        float lon = abs(fract(phi * 8.0 / 3.14159) - 0.5);
-        float latLine = smoothstep(0.98, 0.99, lat);
-        float lonLine = smoothstep(0.98, 0.99, lon);
-        return max(latLine, lonLine);
+        
+        // More detailed grid lines
+        float latDensity = 12.0; // Increased density
+        float lonDensity = 16.0; // Increased density
+        
+        // Primary grid lines (thicker)
+        float latPrimary = abs(fract(theta * (latDensity/2.0) / 3.14159) - 0.5);
+        float lonPrimary = abs(fract(phi * (lonDensity/2.0) / 3.14159) - 0.5);
+        float primaryLatLine = smoothstep(0.97, 0.99, latPrimary);
+        float primaryLonLine = smoothstep(0.97, 0.99, lonPrimary);
+        float primaryGrid = max(primaryLatLine, primaryLonLine);
+        
+        // Secondary grid lines (thinner)
+        float latSecondary = abs(fract(theta * latDensity / 3.14159) - 0.5);
+        float lonSecondary = abs(fract(phi * lonDensity / 3.14159) - 0.5);
+        float secondaryLatLine = smoothstep(0.985, 0.995, latSecondary);
+        float secondaryLonLine = smoothstep(0.985, 0.995, lonSecondary);
+        float secondaryGrid = max(secondaryLatLine, secondaryLonLine);
+        
+        // Combine grids with different intensities
+        return primaryGrid * 0.5 + secondaryGrid * 0.2;
       }
+      
       void main() {
-        float gridOpacity = grid(vPosition, 10.0) * 0.3;
-        // Pulse effect on grid
-        gridOpacity *= 0.7 + 0.3 * sin(time * 0.5);
-        gl_FragColor = vec4(color, gridOpacity);
+        float gridOpacity = grid(vPosition, 10.0);
+        
+        // Enhanced pulse effect on grid
+        float pulse = 0.8 + 0.2 * sin(time * 0.5);
+        float highlightPulse = pow(sin(time * 0.2) * 0.5 + 0.5, 2.0); // Slower, more pronounced pulse
+        
+        // Mix colors based on pulse
+        vec3 finalColor = mix(color, highlightColor, highlightPulse * 0.7);
+        
+        // Add subtle data flow effect along grid lines
+        float dataFlow = sin(vPosition.x * 10.0 + vPosition.y * 8.0 + time * 2.0) * 0.5 + 0.5;
+        dataFlow = pow(dataFlow, 8.0) * 0.3; // Sharp, localized highlights
+        
+        // Combine effects
+        gridOpacity = gridOpacity * pulse + dataFlow;
+        gl_FragColor = vec4(finalColor, gridOpacity);
       }
     `,
     transparent: true,
     side: THREE.DoubleSide,
-    depthWrite: false
+    depthWrite: false,
+    blending: THREE.AdditiveBlending // Enhanced blending for better glow effect
   });
 
   // Setup data point positions
@@ -493,16 +529,18 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
 
   return (
     <group>
-      {/* Darker stars background */}
-      <Stars radius={100} depth={50} count={3000} factor={2} saturation={0} fade speed={0.5} />
-      {/* Main globe with dark blue appearance */}
+      {/* Enhanced stars background with more stars and depth */}
+      <Stars radius={120} depth={80} count={5000} factor={3} saturation={0} fade speed={0.3} />
+      
+      {/* Single Earth globe with enhanced dark blue appearance - no country maps */}
       <mesh ref={globeRef} geometry={globeGeometry} material={earthTexture ? earthMaterial : fallbackMaterial} />
-      {/* Grid overlay for latitude/longitude lines */}
-      <mesh name="grid" geometry={gridGeometry} material={gridMaterial} />
-      {/* Atmospheric glow effect */}
-      <mesh ref={glowRef} geometry={new THREE.SphereGeometry(size * 1.3, 32, 32)} material={glowMaterial} />
+      
+      {/* Enhanced atmospheric glow effect */}
+      <mesh ref={glowRef} geometry={new THREE.SphereGeometry(size * 1.4, 48, 48)} material={glowMaterial} />
+      
       {/* Data points */}
       <points ref={pointsRef} geometry={pointsGeometry} material={pointsMaterial} />
+      
       {/* Data flows with higher density */}
       {activeFlows.map(flow => (
         <DataFlow
@@ -510,28 +548,25 @@ export const Globe: React.FC<GlobeProps> = ({ data, size = 2 }) => {
           curve={flow.curve}
           color={flow.color}
           speed={flow.speed}
-          // Fix: Make sure DataFlow component accepts width prop
-          // Either remove width prop or update DataFlowProps interface
         />
       ))}
+      
       {/* Pulse effects with higher density */}
       {pulsePoints.map(point => (
         <PulsePoint
           key={`pulse-${point.id}`}
           position={point.position}
           color={point.color}
-          // Fix: Make sure PulsePoint component accepts size and speed props
-          // Either remove these props or update PulsePointProps interface
         />
       ))}
-      {/* UI elements around the globe */}
-      {uiElements.map(element => (
-        <UiElement key={`ui-${element.id}`} element={element} />
-      ))}
-      {/* Blue-tinted lighting */}
-      <ambientLight intensity={0.3} color="#8ca9ff" />
-      <directionalLight position={[5, 3, 5]} intensity={0.8} color="#ffffff" />
-      <pointLight position={[0, 0, 0]} intensity={0.6} distance={10} decay={2} color="#4488ff" />
+      
+      {/* Enhanced blue-tinted lighting */}
+      <ambientLight intensity={0.25} color="#4477ff" />
+      <directionalLight position={[5, 3, 5]} intensity={0.7} color="#aaccff" />
+      <pointLight position={[0, 0, 0]} intensity={0.8} distance={12} decay={2} color="#0055ff" />
+      
+      {/* Additional rim light for enhanced edge definition */}
+      <directionalLight position={[-8, -2, -2]} intensity={0.3} color="#0033aa" />
     </group>
   );
 };

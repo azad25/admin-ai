@@ -58,17 +58,67 @@ export const DataFlow: React.FC<DataFlowProps> = ({ curve, color = '#4488ff', sp
 
   return (
     <>
-      {/* Animated particle - brighter and larger */}
+      {/* Enhanced animated particle with glow effect */}
       <animated.mesh ref={ref} scale={scale}>
-        <sphereGeometry args={[0.06, 16, 16]} /> {/* Larger particle */}
+        <sphereGeometry args={[0.1, 32, 32]} /> {/* Larger, smoother particle */}
         <meshBasicMaterial color={color} transparent opacity={1.0} /> {/* Full opacity */}
       </animated.mesh>
       
-      {/* Trail effect - brighter and more visible */}
+      {/* Add glow effect around the particle */}
+      <animated.mesh scale={scale.to(s => [s * 1.8, s * 1.8, s * 1.8])} position={ref.current ? ref.current.position : [0, 0, 0]}>
+        <sphereGeometry args={[0.15, 24, 24]} />
+        <shaderMaterial
+          uniforms={{
+            color: { value: new THREE.Color(color) },
+            time: { value: 0 }
+          }}
+          vertexShader={`
+            varying vec2 vUv;
+            void main() {
+              vUv = uv;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `}
+          fragmentShader={`
+            uniform vec3 color;
+            uniform float time;
+            varying vec2 vUv;
+            void main() {
+              float dist = length(vUv - vec2(0.5));
+              float alpha = smoothstep(0.5, 0.1, dist); // Sharper falloff
+              vec3 glowColor = color * (1.0 - dist * 1.2); // Brighter glow
+              // Add pulsing effect
+              float pulse = 0.85 + 0.15 * sin(time * 2.0);
+              gl_FragColor = vec4(glowColor, alpha * 0.9 * pulse); // Higher opacity
+            }
+          `}
+          transparent={true}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+        />
+      </animated.mesh>
+      
+      {/* Trail effect - enhanced with gradient and glow to match reference image */}
       {trailPoints.length > 1 && (
         <primitive object={new THREE.Line()} ref={trailRef}>
           <bufferGeometry />
-          <lineBasicMaterial color={color} transparent opacity={0.7} linewidth={2} /> {/* Increased opacity and width */}
+          <lineBasicMaterial color={color} transparent opacity={0.9} linewidth={4} /> {/* Further increased opacity and width to match reference */}
+        </primitive>
+      )}
+      
+      {/* Add second trail with additive blending for enhanced glow effect */}
+      {trailPoints.length > 1 && (
+        <primitive object={new THREE.Line()} >
+          <bufferGeometry attributes={{
+            position: trailRef.current?.geometry.attributes.position.clone() || new THREE.BufferAttribute(new Float32Array(0), 3)
+          }} />
+          <lineBasicMaterial 
+            color={color} 
+            transparent 
+            opacity={0.5} 
+            linewidth={6}
+            blending={THREE.AdditiveBlending}
+          />
         </primitive>
       )}
     </>
