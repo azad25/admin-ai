@@ -19,7 +19,8 @@ interface AnimatedMetricsCardProps {
   trend?: {
     value: number;
     isPositive: boolean;
-  };
+  } | 'up' | 'down' | 'stable';
+  score?: number;
 }
 
 const cardVariants = {
@@ -94,9 +95,13 @@ export const AnimatedMetricsCard: React.FC<AnimatedMetricsCardProps> = ({
   icon,
   color,
   trend,
+  score,
 }) => {
   const theme = useTheme();
   const cardColor = color || theme.palette.primary.main;
+  
+  // If score is provided, use it as the value
+  const displayValue = score !== undefined ? score : value;
 
   return (
     <motion.div
@@ -141,26 +146,52 @@ export const AnimatedMetricsCard: React.FC<AnimatedMetricsCardProps> = ({
                   letterSpacing: -0.5,
                 }}
               >
-                {value}{unit}
+                {displayValue}{unit}
               </Typography>
             </motion.div>
             {trend && (
               <Box sx={{ display: 'flex', alignItems: 'center', mt: 1, gap: 0.5 }}>
-                {trend.isPositive ? (
-                  <TrendingUp sx={{ color: theme.palette.success.main, fontSize: '1rem' }} />
+                {typeof trend === 'object' ? (
+                  <>
+                    {trend.isPositive ? (
+                      <TrendingUp sx={{ color: theme.palette.success.main, fontSize: '1rem' }} />
+                    ) : (
+                      <TrendingDown sx={{ color: theme.palette.error.main, fontSize: '1rem' }} />
+                    )}
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: trend.isPositive
+                          ? theme.palette.success.main
+                          : theme.palette.error.main,
+                      }}
+                    >
+                      {trend.value}%
+                    </Typography>
+                  </>
                 ) : (
-                  <TrendingDown sx={{ color: theme.palette.error.main, fontSize: '1rem' }} />
+                  <>
+                    {trend === 'up' ? (
+                      <TrendingUp sx={{ color: theme.palette.success.main, fontSize: '1rem' }} />
+                    ) : trend === 'down' ? (
+                      <TrendingDown sx={{ color: theme.palette.error.main, fontSize: '1rem' }} />
+                    ) : (
+                      <TrendingDown sx={{ color: theme.palette.info.main, fontSize: '1rem' }} />
+                    )}
+                    <Typography
+                      variant="caption"
+                      sx={{
+                        color: trend === 'up'
+                          ? theme.palette.success.main
+                          : trend === 'down'
+                          ? theme.palette.error.main
+                          : theme.palette.info.main,
+                      }}
+                    >
+                      {trend}
+                    </Typography>
+                  </>
                 )}
-                <Typography
-                  variant="caption"
-                  sx={{
-                    color: trend.isPositive
-                      ? theme.palette.success.main
-                      : theme.palette.error.main,
-                  }}
-                >
-                  {trend.value}%
-                </Typography>
               </Box>
             )}
           </Box>
@@ -181,4 +212,4 @@ export const AnimatedMetricsCard: React.FC<AnimatedMetricsCardProps> = ({
       </Paper>
     </motion.div>
   );
-}; 
+};

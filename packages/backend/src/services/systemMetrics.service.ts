@@ -1022,7 +1022,7 @@ export class SystemMetricsService extends EventEmitter {
         failedLoginAttempts: failedLogins.length,
         suspiciousIPs,
         securityScore: this.calculateSecurityScore(securityEvents, suspiciousIPs.length),
-        recommendations: this.generateSecurityRecommendations(securityEvents, suspiciousIPs)
+        recommendations: this.generateSecurityRecommendations(securityEvents, suspiciousIPs.map(ip => ip.ip))
       };
     } catch (error) {
       logger.error('Failed to get security insights:', error);
@@ -1051,7 +1051,7 @@ export class SystemMetricsService extends EventEmitter {
     return Math.max(0, Math.min(100, score));
   }
 
-  private generateSecurityRecommendations(events: SecurityEvent[], suspiciousIPs: {ip: string, count: number}[]): string[] {
+  private generateSecurityRecommendations(events: SecurityEvent[], suspiciousIPs: string[]): string[] {
     const recommendations: string[] = [];
     
     if (suspiciousIPs.length > 0) {

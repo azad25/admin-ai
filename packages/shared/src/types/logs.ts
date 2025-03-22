@@ -46,10 +46,22 @@ export interface LogEntry {
   timestamp: string;
   level: 'info' | 'warn' | 'error' | 'debug';
   message: string;
-  metadata: {
-    userId?: string;
-    source?: string;
-    category?: string;
-    details?: Record<string, any>;
-  };
+  metadata?: Record<string, any>;
+}
+
+export interface ErrorLog extends LogEntry {
+  level: 'error';
+  stack?: string;
+  code?: string;
+  details?: Record<string, any>;
+}
+
+export interface SecurityEvent {
+  id: string;
+  timestamp: string;
+  type: string;
+  action: string;
+  success: boolean;
+  severity: 'low' | 'medium' | 'high' | 'critical';
+  details?: Record<string, any>;
 } 

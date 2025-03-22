@@ -22,6 +22,55 @@ export interface WebSocketEvents {
     timestamp?: string;
   };
   'ai:ready': void;
+  'ai:performance_insights': {
+    cpu: {
+      current: string;
+      trend: string;
+      recommendation: string;
+    };
+    memory: {
+      current: string;
+      trend: string;
+      recommendation: string;
+    };
+    database: {
+      connections: number;
+      trend: string;
+      recommendation: string;
+    };
+    responseTime: {
+      current: number;
+      trend: string;
+      recommendation: string;
+    };
+    summary: string;
+    score: number;
+    aiProvider: string;
+    timestamp: string;
+  };
+  'ai:security_insights': {
+    failedLogins: number;
+    suspiciousActivities: number;
+    suspiciousIPs: number;
+    vulnerabilities: Array<{
+      type: string;
+      description: string;
+      severity: string;
+    }>;
+    score: number;
+    recommendations: string[];
+    timestamp: string;
+  };
+  'ai:usage_insights': {
+    totalRequests: number;
+    activeUsers: number;
+    topPaths: Array<{
+      path: string;
+      count: number;
+      averageResponseTime: number;
+    }>;
+    timestamp: string;
+  };
 
   // Metrics events
   'metrics:request': void;
@@ -47,6 +96,7 @@ export interface WebSocketEvents {
     type: string;
     data: LogEntry;
   };
+  'error:logs:update': ErrorLog[];
 
   // Activity events
   'activity:ai': {
@@ -76,6 +126,76 @@ export interface WebSocketEvents {
   'system:status': {
     health: SystemHealth;
     metrics: SystemMetrics;
+    timestamp: string;
+  };
+  'system:notification': {
+    type: string;
+    message: string;
+    severity: string;
+    timestamp: string;
+    metadata?: Record<string, any>;
+  };
+
+  // Log events
+  'logs:update': LogEntry[];
+  'auth:logs:update': LogEntry[];
+  'request:metrics:update': SystemMetrics[];
+  'locations:update': Array<{
+    ip: string;
+    latitude: number;
+    longitude: number;
+    city: string;
+    country: string;
+    count: number;
+    lastSeen: string;
+  }>;
+  'insights:performance:update': {
+    cpu: {
+      current: string;
+      trend: string;
+      recommendation: string;
+    };
+    memory: {
+      current: string;
+      trend: string;
+      recommendation: string;
+    };
+    database: {
+      connections: number;
+      trend: string;
+      recommendation: string;
+    };
+    responseTime: {
+      current: number;
+      trend: string;
+      recommendation: string;
+    };
+    summary: string;
+    score: number;
+    aiProvider: string;
+    timestamp: string;
+  };
+  'insights:security:update': {
+    failedLogins: number;
+    suspiciousActivities: number;
+    suspiciousIPs: number;
+    vulnerabilities: Array<{
+      type: string;
+      description: string;
+      severity: string;
+    }>;
+    score: number;
+    recommendations: string[];
+    timestamp: string;
+  };
+  'insights:usage:update': {
+    totalRequests: number;
+    activeUsers: number;
+    topPaths: Array<{
+      path: string;
+      count: number;
+      averageResponseTime: number;
+    }>;
     timestamp: string;
   };
 

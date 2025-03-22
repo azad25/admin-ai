@@ -1,97 +1,33 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Container,
-  Typography,
-  Grid,
-  Paper,
   Box,
-  Card,
-  CardContent,
-  Chip,
-  IconButton,
-  Alert,
-  CircularProgress,
-  Tooltip,
-  Divider,
-  Table,
-  TableBody,
-  TableCell,
-  TableContainer,
-  TableHead,
-  TableRow,
-  Button,
-  Dialog,
-  DialogTitle,
-  DialogContent,
-  DialogActions,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Tab,
-  Tabs,
   useTheme,
 } from '@mui/material';
-import {
-  Refresh as RefreshIcon,
-  CheckCircle as HealthyIcon,
-  Warning as WarningIcon,
-  Error as ErrorIcon,
-  LocationOn as LocationIcon,
-  Add as AddIcon,
-  Edit as EditIcon,
-  Delete as DeleteIcon,
-  Memory as MemoryIcon,
-  Storage as StorageIcon,
-  Speed as SpeedIcon,
-  Timeline as TimelineIcon,
-  Security as SecurityIcon,
-} from '@mui/icons-material';
-import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip as ChartTooltip,
-  Legend,
-  ResponsiveContainer,
-} from 'recharts';
-import { systemMetricsService, LogEntry, ErrorLogEntry, AuthLogEntry, RequestMetric, RequestLocation } from '../services/systemMetrics.service';
-import { formatDistanceToNow } from 'date-fns';
-import { LiveRequestMap } from '../components/LiveRequestMap';
+import { systemMetricsService, LogEntry, ErrorLogEntry, AuthLogEntry, RequestMetric as SystemRequestMetric, RequestLocation } from '../services/systemMetrics.service';
 import { useSnackbar } from '../contexts/SnackbarContext';
 import { crudPageService } from '../services/crudPages';
-import { authService } from '../services/auth';
 import { useAuth } from '../contexts/AuthContext';
-import { SystemHealthGauge } from '../components/SystemHealthGauge';
-import { AnimatedMetricsCard } from '../components/AnimatedMetricsCard';
-import { ErrorAnalysis } from '../components/ErrorAnalysis';
-import { AIGlobe } from '../components/3d/AIGlobe';
-import { AIActivityTimeline } from '../components/AIActivityTimeline';
 import { metricsService } from '../services/metrics.service';
 import { wsService } from '../services/websocket.service';
 import { useSocket } from '../contexts/SocketContext';
 import { SystemMetrics, PerformanceInsight, SecurityInsight, UsageInsight } from '../types/metrics';
-import { motion } from 'framer-motion';
-import { TabPanel } from '../components/dashboard/TabPanel';
-import SystemDashboard from '../components/dashboard/SystemDashboard';
-import AIDashboard from '../components/dashboard/AIDashboard';
+import UnifiedDashboard from '../components/dashboard/UnifiedDashboard';
 import CrudDialog from '../components/dashboard/CrudDialog';
 import { CrudItem, CrudField } from '../types/crud';
 
 export const Dashboard: React.FC = () => {
   const theme = useTheme();
-  const [tabValue, setTabValue] = useState(0);
   const { isConnected } = useSocket();
   
-  // Standard Dashboard state
+  // Tab state
+  const [tabValue, setTabValue] = useState<number>(0);
+
+  // Unified Dashboard state
   const [health, setHealth] = useState<any>(null);
   const [recentLogs, setRecentLogs] = useState<LogEntry[]>([]);
   const [errorLogs, setErrorLogs] = useState<ErrorLogEntry[]>([]);
   const [authLogs, setAuthLogs] = useState<AuthLogEntry[]>([]);
-  const [requestMetrics, setRequestMetrics] = useState<RequestMetric[]>([]);
+  const [requestMetrics, setRequestMetrics] = useState<SystemRequestMetric[]>([]);
   const [locations, setLocations] = useState<RequestLocation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -108,13 +44,9 @@ export const Dashboard: React.FC = () => {
   // AI Dashboard state
   const [metrics, setMetrics] = useState<SystemMetrics | null>(null);
   const [aiRequestMetrics, setAiRequestMetrics] = useState<any[]>([]);
-  const [performanceInsights, setPerformanceInsights] = useState<PerformanceInsight | null>(null);
-  const [securityInsights, setSecurityInsights] = useState<SecurityInsight | null>(null);
-  const [usageInsights, setUsageInsights] = useState<UsageInsight | null>(null);
-
-  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-    setTabValue(newValue);
-  };
+  const [performanceInsights, setPerformanceInsights] = useState<PerformanceInsight[]>([]);
+  const [securityInsights, setSecurityInsights] = useState<SecurityInsight[]>([]);
+  const [usageInsights, setUsageInsights] = useState<UsageInsight[]>([]);
 
   const fetchData = async () => {
     try {
@@ -128,7 +60,7 @@ export const Dashboard: React.FC = () => {
         return;
       }
       
-      // Batch API calls with a single request
+      // Batch API calls for unified dashboard
       const [
         healthData,
         logsData,
@@ -163,6 +95,31 @@ export const Dashboard: React.FC = () => {
       
       setLocations(locationsData || []);
       
+      // Fetch AI dashboard data
+      const [aiMetricsData, performanceData, securityData, usageData] = await Promise.allSettled([
+        metricsService.getSystemMetrics(),
+        metricsService.getPerformanceInsights(),
+        metricsService.getSecurityInsights(),
+        metricsService.getUsageInsights(),
+      ]);
+
+      if (aiMetricsData.status === 'fulfilled') setMetrics(aiMetricsData.value);
+      if (performanceData.status === 'fulfilled') {
+        // Ensure performanceInsights is an array
+        const insightsData = performanceData.value;
+        setPerformanceInsights(Array.isArray(insightsData) ? insightsData : [insightsData].filter(Boolean));
+      }
+      if (securityData.status === 'fulfilled') {
+        // Ensure securityInsights is an array
+        const insightsData = securityData.value;
+        setSecurityInsights(Array.isArray(insightsData) ? insightsData : [insightsData].filter(Boolean));
+      }
+      if (usageData.status === 'fulfilled') {
+        // Ensure usageInsights is an array
+        const insightsData = usageData.value;
+        setUsageInsights(Array.isArray(insightsData) ? insightsData : [insightsData].filter(Boolean));
+      }
+
       setLoading(false);
     } catch (error) {
       console.error('Error fetching dashboard data:', error);
@@ -171,46 +128,51 @@ export const Dashboard: React.FC = () => {
     }
   };
 
-  // Fetch AI Dashboard data
+  // Fetch AI Dashboard specific data
   const fetchAIDashboardData = async () => {
     try {
-      const [
-        healthData,
-        metricsData,
-        requestMetricsData,
-        locationsData,
-        performanceData,
-        securityData,
-        usageData,
-      ] = await Promise.allSettled([
-        metricsService.getSystemHealth(),
+      setLoading(true);
+      
+      const [aiMetricsData, requestMetricsData, performanceData, securityData, usageData] = await Promise.allSettled([
         metricsService.getSystemMetrics(),
         metricsService.getRequestMetrics(),
-        metricsService.getLocationHeatmap(),
         metricsService.getPerformanceInsights(),
         metricsService.getSecurityInsights(),
         metricsService.getUsageInsights(),
       ]);
 
-      // Set data only if the promise was fulfilled
-      if (healthData.status === 'fulfilled') setHealth(healthData.value);
-      if (metricsData.status === 'fulfilled') setMetrics(metricsData.value);
+      if (aiMetricsData.status === 'fulfilled') setMetrics(aiMetricsData.value);
       if (requestMetricsData.status === 'fulfilled') setAiRequestMetrics(Array.isArray(requestMetricsData.value) ? requestMetricsData.value : []);
-      if (locationsData.status === 'fulfilled') setLocations(Array.isArray(locationsData.value) ? locationsData.value : []);
-      if (performanceData.status === 'fulfilled') setPerformanceInsights(performanceData.value);
-      if (securityData.status === 'fulfilled') setSecurityInsights(securityData.value);
-      if (usageData.status === 'fulfilled') setUsageInsights(usageData.value);
+      if (performanceData.status === 'fulfilled') {
+        // Ensure performanceInsights is an array
+        const insightsData = performanceData.value;
+        setPerformanceInsights(Array.isArray(insightsData) ? insightsData : [insightsData].filter(Boolean));
+      }
+      if (securityData.status === 'fulfilled') {
+        // Ensure securityInsights is an array
+        const insightsData = securityData.value;
+        setSecurityInsights(Array.isArray(insightsData) ? insightsData : [insightsData].filter(Boolean));
+      }
+      if (usageData.status === 'fulfilled') {
+        // Ensure usageInsights is an array
+        const insightsData = usageData.value;
+        setUsageInsights(Array.isArray(insightsData) ? insightsData : [insightsData].filter(Boolean));
+      }
+
+      setLoading(false);
 
       // Log any errors
-      [healthData, metricsData, requestMetricsData, locationsData, performanceData, securityData, usageData]
+      [aiMetricsData, requestMetricsData, performanceData, securityData, usageData]
         .filter(result => result.status === 'rejected')
         .forEach(result => {
           if (result.status === 'rejected') {
-            console.error('Error fetching dashboard data:', result.reason);
+            console.error('Error fetching AI dashboard data:', result.reason);
           }
         });
     } catch (error) {
       console.error('Error fetching AI dashboard data:', error);
+      setError('Failed to load AI dashboard data');
+      setLoading(false);
     }
   };
 
@@ -311,7 +273,7 @@ export const Dashboard: React.FC = () => {
       }, 120000) : null; // Poll every 2 minutes
     
     return () => {
-      // Clean up WebSocket listeners
+      // Clean up WebSocket listeners with empty callback if necessary
       wsService.off('health_update');
       wsService.off('health:update');
       wsService.off('metrics:update');
@@ -384,7 +346,7 @@ export const Dashboard: React.FC = () => {
   };
 
   // Map system health status to gauge status for AI Dashboard
-  const getGaugeStatus = (status: any['status']): 'healthy' | 'warning' | 'critical' => {
+  const getGaugeStatus = (status?: string): 'healthy' | 'warning' | 'critical' => {
     switch (status) {
       case 'healthy':
         return 'healthy';
@@ -512,42 +474,27 @@ export const Dashboard: React.FC = () => {
 
   return (
     <Box sx={{ width: '100%' }}>
-      <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-        <Tabs value={tabValue} onChange={handleTabChange} aria-label="dashboard tabs">
-          <Tab label="System Dashboard" />
-          <Tab label="AI Dashboard" />
-        </Tabs>
-      </Box>
-      <TabPanel value={tabValue} index={0}>
-        <SystemDashboard
-          health={health}
-          recentLogs={recentLogs}
-          errorLogs={errorLogs}
-          authLogs={authLogs}
-          requestMetrics={requestMetrics}
-          locations={locations}
-          items={items}
-          fields={fields}
-          loading={loading}
-          error={error}
-          onRefresh={handleManualRefresh}
-          onAdd={handleAdd}
-          onEdit={handleEdit}
-          onDelete={handleDelete}
-        />
-      </TabPanel>
-      <TabPanel value={tabValue} index={1}>
-        <AIDashboard
-          health={health}
-          metrics={metrics}
-          requestMetrics={requestMetrics}
-          aiRequestMetrics={aiRequestMetrics}
-          locations={locations}
-          performanceInsights={performanceInsights}
-          securityInsights={securityInsights}
-          usageInsights={usageInsights}
-        />
-      </TabPanel>
+      <UnifiedDashboard
+        health={health}
+        recentLogs={recentLogs}
+        errorLogs={errorLogs}
+        authLogs={authLogs}
+        requestMetrics={requestMetrics}
+        locations={locations}
+        items={items}
+        fields={fields}
+        loading={loading}
+        error={error}
+        metrics={metrics}
+        aiRequestMetrics={aiRequestMetrics}
+        performanceInsights={performanceInsights}
+        securityInsights={securityInsights}
+        usageInsights={usageInsights}
+        onRefresh={handleManualRefresh}
+        onAdd={handleAdd}
+        onEdit={handleEdit}
+        onDelete={handleDelete}
+      />
 
       {/* CRUD Dialog */}
       <CrudDialog
@@ -561,4 +508,4 @@ export const Dashboard: React.FC = () => {
       />
     </Box>
   );
-}; 
+};

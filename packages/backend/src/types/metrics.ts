@@ -23,28 +23,74 @@ export interface RequestLocation {
 }
 
 export interface AIMessageMetadata {
-  status: 'success' | 'warning' | 'error';
-  category: string;
-  source: {
-    page: string;
-    controller: string;
-    action: string;
-    details: Record<string, any>;
-  };
-  timestamp: string;
+  userId?: string;
+  timestamp?: string;
+  context?: Record<string, any>;
 }
 
 export interface ErrorLog extends SharedErrorLog {
   // Additional backend-specific fields can be added here
 }
 
-export interface SystemHealth extends SharedSystemHealth {
-  // Additional backend-specific fields can be added here
-  status: 'healthy' | 'degraded' | 'critical';
+export interface SystemHealth {
+  timestamp: string;
+  score: number;
+  services: {
+    [key: string]: {
+      status: 'up' | 'down' | 'degraded';
+      lastCheck: string;
+      message?: string;
+    };
+  };
+  resources: {
+    cpu: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+    memory: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+    disk: {
+      usage: number;
+      status: 'critical' | 'warning' | 'normal';
+    };
+  };
 }
 
-export interface SystemMetrics extends SharedSystemMetrics {
-  // Additional backend-specific fields can be added here
+export interface SystemMetrics {
+  cpuUsage: number;
+  memoryUsage: number;
+  diskUsage?: number;
+  errorCount: number;
+  totalRequests: number;
+  activeUsers: number;
+  averageResponseTime?: number;
+  warningCount?: number;
+  database?: {
+    active_connections: number;
+  };
+  cpu?: {
+    usage: number;
+    status: 'critical' | 'warning' | 'normal';
+    trend: 'up' | 'down' | 'stable';
+    recommendations: string[];
+  };
+  memory?: {
+    usage: number;
+    status: 'critical' | 'warning' | 'normal';
+    trend: 'up' | 'down' | 'stable';
+    recommendations: string[];
+  };
+  disk?: {
+    usage: number;
+    status: 'critical' | 'warning' | 'normal';
+  };
+  topPaths?: Array<{
+    path: string;
+    count: number;
+    averageResponseTime: number;
+  }>;
 }
 
 export interface AIAnalysis extends SharedAIAnalysis {

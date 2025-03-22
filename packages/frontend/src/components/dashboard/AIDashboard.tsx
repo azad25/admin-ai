@@ -13,7 +13,6 @@ import {
 } from '@mui/icons-material';
 import { motion } from 'framer-motion';
 import { SystemHealthGauge } from '../SystemHealthGauge';
-import { AnimatedMetricsCard } from '../AnimatedMetricsCard';
 import { ErrorAnalysis } from '../ErrorAnalysis';
 import AIGlobe from '../3d/aiglobe/index';
 import { AIActivityTimeline, ActivityData } from '../AIActivityTimeline';
@@ -69,7 +68,6 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [aiAnalysis, setAiAnalysis] = useState<string>('AI system is analyzing metrics and providing insights in real-time.');
   const [activityData, setActivityData] = useState<ActivityData[]>([]);
-  const [aiMessages, setAiMessages] = useState<string[]>([]);
 
   useEffect(() => {
     // Calculate AI health score based on available metrics
@@ -201,19 +199,7 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
     };
   }, []);
 
-  // Map system health status to gauge status
-  const getGaugeStatus = (status?: string): 'healthy' | 'warning' | 'critical' => {
-    switch (status) {
-      case 'healthy':
-        return 'healthy';
-      case 'warning':
-        return 'warning';
-      case 'error':
-        return 'critical';
-      default:
-        return aiStatus;
-    }
-  };
+
 
   // Format percentage values to 2 decimal places
   const formatPercentage = (value: number | undefined): number => {
@@ -427,7 +413,6 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
     
     // Generate AI messages for the chat window
     const newMessage = `[AI Assistant] ${analysis} ${suggestions.length > 0 ? 'Suggestions: ' + suggestions.join(' ') : ''}`;
-    setAiMessages(prev => [...prev, newMessage]);
     
     // Simulate sending message to chat window
     console.log('AI Assistant Message:', newMessage);
@@ -441,28 +426,7 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
 
   useEffect(() => {
     // Analyze system data when metrics change
-    const analysis = analyzeSystemData();
-    
-    // Generate performance insights
-    const enhancedPerformanceInsights: ExtendedPerformanceInsight = {
-      cpu: {
-        current: metrics?.cpuUsage || 0.27,
-        trend: "stable",
-        recommendation: analysis.suggestions.find(s => s.includes('CPU')) || "CPU usage is optimal"
-      },
-      memory: {
-        current: metrics?.memoryUsage || 0.99,
-        trend: "stable",
-        recommendation: analysis.suggestions.find(s => s.includes('memory')) || "Memory usage is optimal"
-      },
-      database: {
-        connections: 12,
-        trend: "stable",
-        recommendation: "Database performance is good"
-      },
-      summary: analysis.analysis,
-      score: analysis.healthScore
-    };
+    analyzeSystemData();
     
     // Update AI activity data
     generateActivityData();
@@ -568,6 +532,35 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
   return (
     <Box sx={{ p: 3 }}>
       <Grid container spacing={3}>
+      {/* Global Request Distribution */}
+      <Grid item xs={12} md={12}>
+          <motion.div
+            initial={{ opacity: 0, scale: 0.9 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.7, delay: 0.5 }}
+          >
+            <Paper elevation={3} sx={{ p: 2, borderRadius: 2 }}>
+              <Box display="flex" alignItems="center" mb={2}>
+                <motion.div
+                  initial="initial"
+                  animate="animate"
+                  variants={iconVariants}
+                  whileHover="pulse"
+                >
+                  <InsightsIcon sx={{ mr: 1, color: theme.palette.primary.main, fontSize: 28 }} />
+                </motion.div>
+                <Typography variant="h6">Global AI Activity</Typography>
+              </Box>
+              <AIGlobe data={globeData} />
+              <Box mt={1} px={2}>
+                <Typography variant="caption" color="text.secondary">
+                  Visualizing real-time AI request distribution across the globe. Each point represents user activity.
+                </Typography>
+              </Box>
+            </Paper>
+          </motion.div>
+        </Grid>
+
         {/* Top Row Widgets - All Same Size */}
         <Grid item xs={12} md={3}>
           <motion.div
@@ -840,35 +833,6 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
           </motion.div>
         </Grid>
 
-        {/* Global Request Distribution */}
-        <Grid item xs={12} md={6}>
-          <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.7, delay: 0.5 }}
-          >
-            <Paper elevation={3} sx={{ p: 2, borderRadius: 2 }}>
-              <Box display="flex" alignItems="center" mb={2}>
-                <motion.div
-                  initial="initial"
-                  animate="animate"
-                  variants={iconVariants}
-                  whileHover="pulse"
-                >
-                  <InsightsIcon sx={{ mr: 1, color: theme.palette.primary.main, fontSize: 28 }} />
-                </motion.div>
-                <Typography variant="h6">Global AI Activity</Typography>
-              </Box>
-              <AIGlobe data={globeData} />
-              <Box mt={1} px={2}>
-                <Typography variant="caption" color="text.secondary">
-                  Visualizing real-time AI request distribution across the globe. Each point represents user activity.
-                </Typography>
-              </Box>
-            </Paper>
-          </motion.div>
-        </Grid>
-
         {/* AI Activity Timeline */}
         <Grid item xs={12} md={6}>
           <motion.div
@@ -952,4 +916,4 @@ export const AIDashboard: React.FC<AIDashboardProps> = ({
   );
 };
 
-export default AIDashboard; 
+export default AIDashboard;

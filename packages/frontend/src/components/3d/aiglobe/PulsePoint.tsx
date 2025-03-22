@@ -1,148 +1,241 @@
-import React, { useRef } from 'react';
-import { useSpring, animated } from '@react-spring/three';
+import React, { useRef, useState, useEffect } from 'react';
 import * as THREE from 'three';
-import { PulsePointProps } from './types';
+import { useFrame, useThree } from '@react-three/fiber';
+import { Text } from '@react-three/drei';
+
+interface PulsePointProps {
+  position: [number, number, number];
+  color?: string;
+  size?: number;
+  pulseSpeed?: number;
+  isActive?: boolean;
+  data?: any;
+  onClick?: (data: any) => void;
+}
 
 /**
- * PulsePoint component that creates an animated pulsing effect at a specific location
+ * PulsePoint component for showing glowing points on the globe
  * 
- * @param position - 3D position coordinates [x, y, z]
- * @param color - Color of the pulse effect (default: '#4488ff')
+ * Creates an animated, pulsing point with hover and click interactivity.
+ * Used to represent locations or data points on the globe with a glowing effect.
  */
-export const PulsePoint: React.FC<PulsePointProps> = ({ position, color = '#4488ff' }) => {
-  const outerRef = useRef<THREE.Mesh>(null);
-  const middleRef = useRef<THREE.Mesh>(null);
-  const innerRef = useRef<THREE.Mesh>(null);
+export const PulsePoint: React.FC<PulsePointProps> = ({
+  position,
+  color = '#44ccff',
+  size = 0.05,
+  pulseSpeed = 1,
+  isActive = false,
+  data,
+  onClick
+}) => {
+  // References for animation
+  const pointRef = useRef<THREE.Mesh>(null);
+  const glowRef = useRef<THREE.Mesh>(null);
+  const pulseRef = useRef<THREE.Mesh>(null);
+  const labelRef = useRef<any>(null);
   
-  // Enhanced spring animations for more dynamic effects to match reference image
-  const { outerScale, outerOpacity } = useSpring({
-    from: { outerScale: 0.1, outerOpacity: 1.0 },
-    to: async (next) => {
-      while (true) {
-        await next({ outerScale: 2.5, outerOpacity: 0.0, config: { duration: 2000 } }); // Larger scale, faster animation
-        await next({ outerScale: 0.1, outerOpacity: 1.0, config: { duration: 0 } });
+  // State for hover and animation
+  const [hovered, setHovered] = useState(false);
+  const [clicked, setClicked] = useState(false);
+  const [timeOffset] = useState(() => Math.random() * Math.PI * 2);
+  
+  // Calculate colors for various states
+  const baseColor = new THREE.Color(color);
+  const activeColor = new THREE.Color(0xffffff);
+  const hoverColor = new THREE.Color('#66eeff');
+  
+  // Create pulse material with time-based animations
+  const pulseMaterial = useRef(
+    new THREE.ShaderMaterial({
+      uniforms: {
+        color: { value: new THREE.Color(color) },
+        time: { value: 0 },
+        activeState: { value: 0 },
+      },
+      vertexShader: `
+        varying vec3 vPosition;
+        varying vec2 vUv;
+        
+        void main() {
+          vPosition = position;
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 color;
+        uniform float time;
+        uniform float activeState;
+        
+        varying vec3 vPosition;
+        varying vec2 vUv;
+        
+        void main() {
+          // Calculate distance from center
+          vec2 center = vUv - 0.5;
+          float dist = length(center);
+          
+          // Create pulse wave
+          float wave = sin(time * 3.0 - dist * 10.0) * 0.5 + 0.5;
+          wave = smoothstep(0.0, 1.0, wave);
+          
+          // Edge glow with time-based pulse
+          float edge = smoothstep(0.5, 0.0, dist) * (0.5 + 0.5 * wave);
+          
+          // Boost for active/hover states
+          float boost = activeState * 0.7;
+          
+          // Combine effects
+          float alpha = edge * (1.0 + boost);
+          
+          // Brighter core for active state
+          vec3 finalColor = color;
+          if (dist < 0.2) {
+            finalColor = mix(color, vec3(1.0, 1.0, 1.0), activeState * 0.7);
+          }
+          
+          gl_FragColor = vec4(finalColor, alpha);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    })
+  );
+  
+  // Setup click handler
+  const handleClick = (event: any) => {
+    event.stopPropagation();
+    setClicked(!clicked);
+    if (onClick && data) {
+      onClick(data);
+    }
+  };
+  
+  // Handle animation and appearance changes based on state
+  useFrame(({ clock }) => {
+    const time = clock.getElapsedTime() + timeOffset;
+    
+    if (pulseMaterial.current) {
+      pulseMaterial.current.uniforms.time.value = time;
+      pulseMaterial.current.uniforms.activeState.value = (isActive || hovered) ? 1.0 : 0.0;
+    }
+    
+    if (pointRef.current) {
+      // Core point animations
+      const scale = 1 + 0.2 * Math.sin(time * pulseSpeed * 2);
+      pointRef.current.scale.set(scale, scale, scale);
+      
+      // Set color based on state
+      if (pointRef.current.material instanceof THREE.MeshBasicMaterial) {
+        if (isActive) {
+          pointRef.current.material.color.copy(activeColor);
+          pointRef.current.material.opacity = 1;
+        } else if (hovered) {
+          pointRef.current.material.color.copy(hoverColor);
+          pointRef.current.material.opacity = 0.9;
+        } else {
+          pointRef.current.material.color.copy(baseColor);
+          pointRef.current.material.opacity = 0.7 + 0.3 * Math.sin(time * pulseSpeed * 3);
+        }
       }
-    },
+    }
+    
+    if (glowRef.current) {
+      // Glow effect animations
+      const glowScale = 1.5 + 0.5 * Math.sin(time * pulseSpeed);
+      glowRef.current.scale.set(glowScale, glowScale, glowScale);
+      
+      if (glowRef.current.material instanceof THREE.MeshBasicMaterial) {
+        glowRef.current.material.opacity = 0.3 + 0.2 * Math.sin(time * pulseSpeed * 2);
+      }
+    }
+    
+    if (pulseRef.current) {
+      // Outer pulse ring animations
+      const pulseScale = 1 + 0.6 * Math.sin(time * pulseSpeed * 1.5);
+      pulseRef.current.scale.set(pulseScale, pulseScale, pulseScale);
+    }
+    
+    // Update label if active
+    if (labelRef.current) {
+      labelRef.current.visible = isActive || hovered;
+      if (labelRef.current.visible) {
+        const labelScale = 1 + 0.1 * Math.sin(time * 2);
+        labelRef.current.scale.set(labelScale, labelScale, labelScale);
+      }
+    }
   });
   
-  const { middleScale, middleOpacity } = useSpring({
-    from: { middleScale: 0.1, middleOpacity: 1.0 },
-    to: async (next) => {
-      while (true) {
-        await next({ middleScale: 1.8, middleOpacity: 0.0, config: { duration: 1700 } }); // Larger scale, faster animation
-        await next({ middleScale: 0.1, middleOpacity: 1.0, config: { duration: 0 } });
-      }
-    },
-    delay: 200, // Shorter delay for more overlapping animations
-  });
+  // Get label text from data
+  const getLabelText = () => {
+    if (!data) return '';
+    return data.city || data.label || data.id?.toString() || '';
+  };
   
-  // Enhanced core point with more pronounced pulsing to match reference image
-  const { innerScale, innerOpacity } = useSpring({
-    from: { innerScale: 0.8, innerOpacity: 0.8 },
-    to: async (next) => {
-      while (true) {
-        await next({ innerScale: 1.5, innerOpacity: 1.0, config: { duration: 700 } }); // Faster, more pronounced pulse
-        await next({ innerScale: 0.8, innerOpacity: 0.8, config: { duration: 700 } });
-      }
-    },
-  });
-  
-  // Add a fourth layer for enhanced glow effect to match reference image
-  const { glowScale, glowOpacity } = useSpring({
-    from: { glowScale: 0.5, glowOpacity: 0.0 },
-    to: async (next) => {
-      while (true) {
-        await next({ glowScale: 3.5, glowOpacity: 0.4, config: { duration: 2200 } }); // Larger, brighter glow
-        await next({ glowScale: 0.5, glowOpacity: 0.0, config: { duration: 0 } });
-      }
-    },
-    delay: 50, // Start almost immediately
-  });
-
   return (
-    <group position={position}>
-      {/* Enhanced outer glow layer */}
-      <animated.mesh
-        scale={glowScale.to(s => [s, s, s])}
-      >
-        <sphereGeometry args={[0.08, 24, 24]} />
-        <animated.shaderMaterial
-          uniforms={{
-            color: { value: new THREE.Color(color) },
-            opacity: { value: 0 }
-          }}
-          vertexShader={`
-            varying vec2 vUv;
-            varying vec3 vPosition;
-            void main() {
-              vUv = uv;
-              vPosition = position;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `}
-          fragmentShader={`
-            uniform vec3 color;
-            uniform float opacity;
-            varying vec2 vUv;
-            varying vec3 vPosition;
-            void main() {
-              float dist = length(vUv - vec2(0.5));
-              float alpha = smoothstep(0.5, 0.0, dist) * opacity;
-              vec3 glowColor = color * (1.0 - dist * 1.8);
-              gl_FragColor = vec4(glowColor, alpha * 0.4);
-            }
-          `}
-          transparent={true}
+    <group 
+      position={position}
+      onPointerOver={(e) => {
+        e.stopPropagation();
+        setHovered(true);
+      }}
+      onPointerOut={() => setHovered(false)}
+      onClick={handleClick}
+    >
+      {/* Core point */}
+      <mesh ref={pointRef}>
+        <sphereGeometry args={[size * 0.6, 16, 16]} />
+        <meshBasicMaterial 
+          color={color} 
+          transparent 
+          opacity={0.8}
           blending={THREE.AdditiveBlending}
-          depthWrite={false}
-          uniforms-opacity-value={glowOpacity}
         />
-      </animated.mesh>
+      </mesh>
       
-      {/* Outer pulse layer */}
-      <animated.mesh
-        ref={outerRef}
-        scale={outerScale.to(s => [s, s, s])}
-      >
-        <sphereGeometry args={[0.09, 24, 24]} /> {/* Larger, smoother geometry */}
-        <animated.meshBasicMaterial 
+      {/* Inner glow */}
+      <mesh ref={glowRef}>
+        <sphereGeometry args={[size * 1.2, 16, 16]} />
+        <meshBasicMaterial 
           color={color} 
           transparent 
-          opacity={outerOpacity} 
-          blending={THREE.AdditiveBlending} 
-          {...{/* Enhanced blending */}}
+          opacity={0.4}
+          blending={THREE.AdditiveBlending}
         />
-      </animated.mesh>
+      </mesh>
       
-      {/* Middle pulse layer */}
-      <animated.mesh
-        ref={middleRef}
-        scale={middleScale.to(s => [s, s, s])}
-      >
-        <sphereGeometry args={[0.07, 24, 24]} /> {/* Larger, smoother geometry */}
-        <animated.meshBasicMaterial 
-          color={color} 
-          transparent 
-          opacity={middleOpacity} 
-          blending={THREE.AdditiveBlending} 
-          {...{/* Enhanced blending */}}
-        />
-      </animated.mesh>
+      {/* Outer pulse effect */}
+      <mesh ref={pulseRef}>
+        <sphereGeometry args={[size * 2, 16, 16]} />
+        <primitive object={pulseMaterial.current} />
+      </mesh>
       
-      {/* Core point - enhanced with opacity animation */}
-      <animated.mesh
-        ref={innerRef}
-        scale={innerScale.to(s => [s, s, s])}
-      >
-        <sphereGeometry args={[0.05, 24, 24]} /> {/* Larger, smoother geometry */}
-        <animated.meshBasicMaterial 
-          color={color} 
-          transparent 
-          opacity={innerOpacity} 
-          blending={THREE.AdditiveBlending} 
-          {...{/* Enhanced blending */}}
-        />
-      </animated.mesh>
+      {/* Label that shows on hover or when active */}
+      {getLabelText() && (
+        <group position={[0, size * 3, 0]}>
+          <Text
+            ref={labelRef}
+            fontSize={size * 1.5}
+            color={isActive ? "#ffffff" : color}
+            anchorX="center"
+            anchorY="middle"
+            outlineWidth={0.02}
+            outlineColor="#000000"
+            visible={isActive || hovered}
+          >
+            {getLabelText()}
+          </Text>
+        </group>
+      )}
+      
+      {/* Add a small light source at each point to illuminate the globe surface */}
+      <pointLight
+        color={color}
+        intensity={0.2}
+        distance={1}
+        decay={2}
+      />
     </group>
   );
 };

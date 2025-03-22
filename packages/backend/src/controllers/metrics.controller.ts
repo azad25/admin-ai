@@ -6,6 +6,8 @@ import { RequestWithUser } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import { AIMessageMetadata } from '../types/metrics';
+import { SystemMetrics, SystemHealth } from '../types/metrics';
+import { ErrorLog, LogEntry, SecurityEvent } from '../types/logs';
 
 /**
  * Controller for system metrics and monitoring
@@ -21,6 +23,10 @@ export class MetricsController {
     this.systemMetricsService = systemMetricsService;
     this.systemMetricsService.initializeServices(wsService, aiService);
   }
+
+  public handleMetricsUpdate = (data: { health: SystemHealth; metrics: SystemMetrics; timestamp: string }): void => {
+    this.wsService.broadcast('metrics:update', data);
+  };
 
   public getSystemHealth = async (req: RequestWithUser, res: Response) => {
     try {
@@ -107,6 +113,8 @@ export class MetricsController {
         memoryUsage: metrics.memoryUsage || 0,
         diskUsage: 0,
         totalRequests: metrics.totalRequests || 0,
+        errorCount: metrics.errorCount || 0,
+        activeUsers: metrics.activeUsers || 0,
         averageResponseTime: metrics.averageResponseTime || 0
       });
 
@@ -144,6 +152,8 @@ export class MetricsController {
         memoryUsage: 0,
         diskUsage: 0,
         totalRequests: 0,
+        errorCount: 0,
+        activeUsers: 0,
         averageResponseTime: 0
       });
 
@@ -261,73 +271,13 @@ export class MetricsController {
 
   public getUsageInsights = async (req: RequestWithUser, res: Response) => {
     try {
-      // Get request metrics for usage analysis
-      const requestMetrics = await this.systemMetricsService.getCurrentMetrics();
-      
-      if (!requestMetrics) {
-        return res.json({
-          daily: {
-            requests: 0,
-            uniqueUsers: 0,
-            peakHour: 'N/A'
-          },
-          weekly: {
-            trend: 'stable',
-            averageLoad: 0
-          },
-          monthly: {
-            growth: 0,
-            forecast: 0
-          },
-          topPaths: [],
-          recommendations: ['Start collecting usage data'],
-          timestamp: new Date().toISOString()
-        });
-      }
-      
-      // Calculate daily metrics
-      const dailyRequests = requestMetrics.totalRequests || 0;
-      const uniqueUsers = requestMetrics.activeUsers || 0;
-      
-      // Get peak hour (mock data for now)
-      const hours = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23];
-      const hourCounts = hours.map(hour => ({
-        hour,
-        count: Math.floor(Math.random() * dailyRequests / 24)
-      }));
-      const peakHour = hourCounts.sort((a, b) => b.count - a.count)[0].hour;
-      
-      // Calculate request trend
+      const metrics = await this.systemMetricsService.getSystemMetrics();
       const requestTrend = this.systemMetricsService.calculateRequestTrend();
       
-      // Get top paths
-      const topPaths = requestMetrics.topPaths || [];
-      
-      // Generate usage insights
       const usageInsights = {
-        daily: {
-          requests: dailyRequests,
-          uniqueUsers,
-          peakHour: `${peakHour}:00`
-        },
-        weekly: {
-          trend: requestTrend.trend || 'stable',
-          averageLoad: requestTrend.averageLoad || 0
-        },
-        monthly: {
-          growth: requestTrend.growth || 0,
-          forecast: requestTrend.forecast || 0
-        },
-        topPaths: topPaths.slice(0, 5).map((path: any) => ({
-          path: path.path,
-          count: path.count,
-          trend: path.trend || 'stable'
-        })),
-        recommendations: [
-          'Optimize frequently accessed endpoints',
-          'Consider caching for high-traffic routes',
-          'Monitor user engagement patterns'
-        ],
+        totalRequests: metrics.totalRequests,
+        activeUsers: metrics.activeUsers,
+        topPaths: metrics.topPaths || [],
         timestamp: new Date().toISOString()
       };
       
@@ -363,11 +313,6 @@ export class MetricsController {
 
   public getRecentLogs = async (req: RequestWithUser, res: Response) => {
     try {
-      // Check if the method exists
-      if (typeof this.systemMetricsService.getRecentLogs !== 'function') {
-        return res.json([]);
-      }
-      
       const logs = await this.systemMetricsService.getRecentLogs();
       res.json(logs);
     } catch (error) {
@@ -376,110 +321,46 @@ export class MetricsController {
     }
   };
 
-  // Add a new method to handle WebSocket metrics requests
   public handleWebSocketMetricsRequest = async (userId: string) => {
     try {
-      logger.info(`Handling WebSocket metrics request for user ${userId}`);
-      
-      // Get all metrics data with safe method calls
-      const [
+      const metrics = await this.systemMetricsService.getCurrentMetrics();
+      const health = await this.systemMetricsService.getSystemHealth();
+      const timestamp = new Date().toISOString();
+
+      // Send metrics update
+      this.wsService.sendToUser(userId, 'metrics:update', {
         health,
         metrics,
-        performanceInsights,
-        securityInsights,
-        usageInsights
-      ] = await Promise.all([
-        this.systemMetricsService.getSystemHealth(),
-        this.systemMetricsService.getSystemMetrics(),
-        this.systemMetricsService.getPerformanceInsights(),
-        this.systemMetricsService.getSecurityInsights(),
-        this.systemMetricsService.getUsageInsights()
-      ]);
-
-      // Safely get additional data that might not be available
-      let recentLogs = [];
-      let errorLogs = [];
-      let authLogs = [];
-      let requestMetrics = null;
-      let locations = [];
-
-      try {
-        if (typeof this.systemMetricsService.getRecentLogs === 'function') {
-          recentLogs = await this.systemMetricsService.getRecentLogs();
-        }
-      } catch (error) {
-        logger.error('Error getting recent logs:', error);
-      }
-
-      try {
-        errorLogs = await this.systemMetricsService.getRecentErrors();
-      } catch (error) {
-        logger.error('Error getting error logs:', error);
-      }
-
-      try {
-        authLogs = await this.systemMetricsService.getAuthLogs();
-      } catch (error) {
-        logger.error('Error getting auth logs:', error);
-      }
-
-      try {
-        requestMetrics = await this.systemMetricsService.getCurrentMetrics();
-      } catch (error) {
-        logger.error('Error getting request metrics:', error);
-      }
-
-      try {
-        if (typeof this.systemMetricsService.getRequestLocations === 'function') {
-          locations = await this.systemMetricsService.getRequestLocations();
-          // Ensure locations is always an array
-          locations = Array.isArray(locations) ? locations : [];
-        }
-      } catch (error) {
-        logger.error('Error getting locations:', error);
-        locations = [];
-      }
-
-      // Calculate health score
-      const cpuScore = health.resources.cpu.status === 'normal' ? 100 :
-        health.resources.cpu.status === 'warning' ? 70 : 40;
-      const memoryScore = health.resources.memory.status === 'normal' ? 100 :
-        health.resources.memory.status === 'warning' ? 70 : 40;
-      const diskScore = health.resources.disk.status === 'normal' ? 100 :
-        health.resources.disk.status === 'warning' ? 70 : 40;
-
-      const healthScore = Math.round((cpuScore + memoryScore + diskScore) / 3);
-      
-      const responseHealth = {
-        ...health,
-        score: healthScore,
-        status: healthScore >= 80 ? 'healthy' : healthScore >= 60 ? 'warning' : 'critical'
-      };
-
-      // Send data to the user via WebSocket
-      this.wsService.sendToUser(userId, 'metrics:update', {
-        health: responseHealth,
-        metrics
+        timestamp
       });
-      
+
+      // Get and send recent logs
+      const recentLogs = await this.systemMetricsService.getRecentLogs();
+      const errorLogs = await this.systemMetricsService.getRecentErrors();
+      const authLogs = await this.systemMetricsService.getAuthLogs();
+      const locations = await this.systemMetricsService.getRequestLocations();
+
+      // Send logs updates
       this.wsService.sendToUser(userId, 'logs:update', recentLogs);
       this.wsService.sendToUser(userId, 'error:logs:update', errorLogs);
       this.wsService.sendToUser(userId, 'auth:logs:update', authLogs);
-      this.wsService.sendToUser(userId, 'request:metrics:update', requestMetrics || []);
+      this.wsService.sendToUser(userId, 'request:metrics:update', metrics || []);
       this.wsService.sendToUser(userId, 'locations:update', locations);
+
+      // Get and send insights
+      const performanceInsights = await this.getPerformanceInsights({} as RequestWithUser, {} as Response);
+      const securityInsights = await this.getSecurityInsights({} as RequestWithUser, {} as Response);
+      const usageInsights = await this.getUsageInsights({} as RequestWithUser, {} as Response);
+
+      // Send insights updates
       this.wsService.sendToUser(userId, 'insights:performance:update', performanceInsights);
       this.wsService.sendToUser(userId, 'insights:security:update', securityInsights);
       this.wsService.sendToUser(userId, 'insights:usage:update', usageInsights);
-      
-      // Send AI analysis
-      const aiAnalysis = await this.aiService.analyzeMetrics(metrics);
-      this.wsService.sendToUser(userId, 'metrics:analysis', aiAnalysis);
-      
-      logger.info(`Successfully sent metrics data to user ${userId} via WebSocket`);
     } catch (error) {
-      logger.error(`Error handling WebSocket metrics request for user ${userId}:`, error);
+      logger.error('Failed to handle websocket metrics request:', error);
+      throw new AppError(500, 'Failed to handle websocket metrics request');
     }
-  }
+  };
 }
 
 // Export the controller instance

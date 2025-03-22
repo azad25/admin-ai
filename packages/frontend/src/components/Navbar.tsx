@@ -6,6 +6,8 @@ import {
   IconButton,
   useTheme,
   Box,
+  MenuItem,
+  ListItemIcon,
 } from '@mui/material';
 import {
   LightMode as LightIcon,
@@ -13,10 +15,12 @@ import {
   Logout as LogoutIcon,
   Notifications as NotificationsIcon,
   Settings as SettingsIcon,
+  Public as PublicIcon,
 } from '@mui/icons-material';
 import { useAuth } from '../contexts/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { useAIMessages } from '../contexts/AIMessagesContext';
+import { Link } from 'react-router-dom';
 
 export const Navbar: React.FC = () => {
   const theme = useTheme();
@@ -80,14 +84,14 @@ export const Navbar: React.FC = () => {
               </Box>
             )}
           </IconButton>
-          <IconButton
-            size="large"
-            color="inherit"
-            sx={{ color: theme.palette.text.primary }}
-            onClick={() => navigate('/settings')}
-          >
-            <SettingsIcon />
-          </IconButton>
+          <MenuItem component={Link} to="/settings">
+            <ListItemIcon><SettingsIcon fontSize="small" /></ListItemIcon>
+            Settings
+          </MenuItem>
+          <MenuItem component={Link} to="/test-globe">
+            <ListItemIcon><PublicIcon fontSize="small" /></ListItemIcon>
+            Test Globe
+          </MenuItem>
           <IconButton
             size="large"
             color="inherit"

@@ -23,6 +23,7 @@ import { Settings } from './pages/Settings';
 import { getThemeOptions } from './theme';
 import { ThemeContextType } from './types/theme';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import TestGlobe from './components/3d/TestGlobe';
 
 export const App: React.FC = () => {
   return (
@@ -55,6 +56,7 @@ export const App: React.FC = () => {
                               <Route path="/crud/:id" element={<CrudPage />} />
                               <Route path="/api-keys" element={<ApiKeys />} />
                               <Route path="/settings" element={<Settings />} />
+                              <Route path="/test-globe" element={<TestGlobe />} />
                             </Route>
                           </Routes>
                         </CrudPagesProvider>

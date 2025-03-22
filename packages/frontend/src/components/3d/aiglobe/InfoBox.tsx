@@ -38,36 +38,37 @@ const slideIn = keyframes`
   to { transform: translateX(0); opacity: 1; }
 `;
 
-const Container = styled.div<{ position: string; isActive?: boolean }>`
+const Container = styled.div<{ position: string; $isActive?: boolean }>`
   position: absolute;
-  background-color: rgba(0, 10, 30, 0.75);
-  border: 1px solid rgba(68, 136, 255, 0.8);
+  background-color: rgba(4, 12, 30, 0.8);
+  border: 1px solid rgba(68, 204, 255, 0.6);
   border-radius: 4px;
   color: #ffffff;
   padding: 10px 15px;
   font-family: 'Inter', sans-serif;
   font-size: 12px;
-  width: ${props => props.isActive ? '280px' : '220px'};
-  max-height: ${props => props.isActive ? '220px' : '150px'};
+  width: ${props => props.$isActive ? '280px' : '220px'};
+  max-height: ${props => props.$isActive ? '220px' : '150px'};
   overflow: auto;
   backdrop-filter: blur(5px);
-  box-shadow: 0 0 18px rgba(68, 136, 255, 0.35);
+  box-shadow: 0 0 18px rgba(68, 204, 255, 0.3);
   animation: ${fadeIn} 0.3s ease-out;
   z-index: 10;
   cursor: pointer;
   transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
   
   &:hover {
-    background-color: rgba(0, 20, 50, 0.85);
-    box-shadow: 0 0 25px rgba(68, 136, 255, 0.6);
+    background-color: rgba(4, 20, 50, 0.85);
+    box-shadow: 0 0 25px rgba(68, 204, 255, 0.5);
     transform: scale(1.04);
   }
   
-  ${props => props.isActive && css`
-    background-color: rgba(0, 30, 70, 0.9);
+  ${props => props.$isActive && css`
+    background-color: rgba(8, 30, 60, 0.9);
     animation: ${glowEffect} 1.8s infinite;
     transform: scale(1.06);
     z-index: 20;
+    border: 1px solid rgba(68, 204, 255, 0.9);
     
     &:before {
       content: '';
@@ -76,9 +77,10 @@ const Container = styled.div<{ position: string; isActive?: boolean }>`
       left: -2px;
       right: -2px;
       bottom: -2px;
-      border: 2px solid rgba(68, 136, 255, 0.9);
-      border-radius: 6px;
+      border: 1px solid rgba(68, 204, 255, 0.7);
+      border-radius: 5px;
       pointer-events: none;
+      box-shadow: 0 0 15px rgba(68, 204, 255, 0.5);
     }
   `}
 
@@ -86,46 +88,48 @@ const Container = styled.div<{ position: string; isActive?: boolean }>`
   ${({ position }) => {
     switch (position) {
       case 'top-left':
-        return 'top: 20px; left: 20px;';
+        return css`top: 20px; left: 20px;`;
       case 'top-right':
-        return 'top: 20px; right: 20px;';
+        return css`top: 20px; right: 20px;`;
       case 'bottom-left':
-        return 'bottom: 20px; left: 20px;';
+        return css`bottom: 20px; left: 20px;`;
       case 'bottom-right':
-        return 'bottom: 20px; right: 20px;';
+        return css`bottom: 20px; right: 20px;`;
       case 'left':
-        return 'top: 50%; left: 20px; transform: translateY(-50%);';
+        return css`top: 50%; left: 20px; transform: translateY(-50%);`;
       case 'right':
-        return 'top: 50%; right: 20px; transform: translateY(-50%);';
+        return css`top: 50%; right: 20px; transform: translateY(-50%);`;
       case 'top':
-        return 'top: 20px; left: 50%; transform: translateX(-50%);';
+        return css`top: 20px; left: 50%; transform: translateX(-50%);`;
       case 'bottom':
-        return 'bottom: 20px; left: 50%; transform: translateX(-50%);';
+        return css`bottom: 20px; left: 50%; transform: translateX(-50%);`;
       default:
-        return 'top: 20px; left: 20px;';
+        return css`top: 20px; left: 20px;`;
     }
   }}
   
-  &:after {
-    content: '';
-    position: absolute;
-    bottom: -3px;
-    left: 10%;
-    right: 10%;
-    height: 1px;
-    background: linear-gradient(to right, transparent, rgba(68, 136, 255, 0.7), transparent);
-  }
+  ${() => css`
+    &:after {
+      content: '';
+      position: absolute;
+      bottom: -3px;
+      left: 10%;
+      right: 10%;
+      height: 1px;
+      background: linear-gradient(to right, transparent, rgba(68, 204, 255, 0.7), transparent);
+    }
+  `}
 `;
 
 const Title = styled.div`
   font-weight: 600;
   font-size: 14px;
   margin-bottom: 8px;
-  color: #4488ff;
+  color: #44ccff;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  text-shadow: 0 0 5px rgba(68, 136, 255, 0.5);
+  text-shadow: 0 0 5px rgba(68, 204, 255, 0.5);
   letter-spacing: 0.5px;
   position: relative;
   padding-bottom: 4px;
@@ -135,10 +139,10 @@ const Title = styled.div`
     display: inline-block;
     width: 8px;
     height: 8px;
-    background-color: #4488ff;
+    background-color: #44ccff;
     border-radius: 50%;
     margin-left: 5px;
-    box-shadow: 0 0 8px 2px rgba(68, 136, 255, 0.6);
+    box-shadow: 0 0 8px 2px rgba(68, 204, 255, 0.6);
     animation: ${pulse} 2s infinite;
   }
   
@@ -149,15 +153,15 @@ const Title = styled.div`
     left: 0;
     width: 100%;
     height: 1px;
-    background: linear-gradient(to right, transparent, #4488ff, transparent);
+    background: linear-gradient(to right, transparent, #44ccff, transparent);
   }
 `;
 
-const Content = styled.div<{ isActive?: boolean }>`
+const Content = styled.div<{ $isActive?: boolean }>`
   line-height: 1.4;
   opacity: 0.9;
   transition: all 0.3s ease;
-  animation: ${props => props.isActive ? css`${slideIn} 0.3s ease-out` : 'none'};
+  animation: ${props => props.$isActive ? css`${slideIn} 0.3s ease-out` : 'none'};
   
   &:hover {
     opacity: 1;
@@ -251,39 +255,35 @@ export const InfoBox: React.FC<InfoBoxProps> = ({
   return (
     <Container 
       position={position} 
+      $isActive={isActive} 
       onClick={onClick}
-      isActive={isActive}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
+      data-active={isActive ? 'true' : 'false'}
     >
-      <Title>{title}</Title>
-      <Content isActive={isActive}>
-        {type === 'text' && typeof content === 'string' && content}
-        {type === 'list' && Array.isArray(content) && (
-          <List>
-            {content.map((item, index) => (
-              <li key={index}>{item}</li>
-            ))}
-          </List>
-        )}
-        {type === 'typing' && (
-          <>
-            {typedContent}
-            {typingIndex < contentRef.current.length && <Cursor />}
-          </>
-        )}
-      </Content>
-      {isHovered && (
-        <div style={{ 
-          position: 'absolute', 
-          bottom: '5px', 
-          right: '5px', 
-          fontSize: '10px', 
-          color: 'rgba(68, 136, 255, 0.8)',
-          textShadow: '0 0 3px rgba(0, 0, 0, 0.5)'
-        }}>
-          {isActive ? 'Click to minimize' : 'Click to expand'}
-        </div>
+      <Title>
+        {title}
+      </Title>
+      
+      {type === 'text' && (
+        <Content $isActive={isActive}>
+          {typeof content === 'string' ? content : content.join(' • ')}
+        </Content>
+      )}
+      
+      {type === 'list' && (
+        <List>
+          {Array.isArray(content) && content.map((item, index) => (
+            <li key={index}>{item}</li>
+          ))}
+        </List>
+      )}
+      
+      {type === 'typing' && (
+        <Content $isActive={isActive}>
+          {typedContent}
+          <Cursor />
+        </Content>
       )}
     </Container>
   );

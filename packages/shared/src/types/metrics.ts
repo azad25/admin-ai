@@ -33,6 +33,11 @@ export interface SystemMetrics {
   errorCount: number;
   totalRequests: number;
   activeUsers: number;
+  averageResponseTime?: number;
+  warningCount?: number;
+  database?: {
+    active_connections: number;
+  };
   cpu?: {
     usage: number;
     status: 'critical' | 'warning' | 'normal';
@@ -49,4 +54,9 @@ export interface SystemMetrics {
     usage: number;
     status: 'critical' | 'warning' | 'normal';
   };
+  topPaths?: Array<{
+    path: string;
+    count: number;
+    averageResponseTime: number;
+  }>;
 }

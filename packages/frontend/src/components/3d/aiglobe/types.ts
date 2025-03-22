@@ -25,6 +25,8 @@ export interface AIGlobeProps {
 export interface GlobeProps {
   data: GlobePoint[];
   size?: number;
+  activePoint?: string | number | null;
+  onPointClick?: (data: any) => void;
 }
 
 /**
@@ -39,9 +41,9 @@ export type CurveType = THREE.CurvePath<THREE.Vector3> | {
  */
 export interface DataFlowProps {
   curve: CurveType;
-  color: string;
-  speed: number;
-  width?: number; // Add width prop
+  color?: string;
+  speed?: number;
+  width?: number;
 }
 
 /**
@@ -49,9 +51,12 @@ export interface DataFlowProps {
  */
 export interface PulsePointProps {
   position: [number, number, number];
-  color: string;
-  size?: number; // Add size prop
-  speed?: number; // Add speed prop
+  color?: THREE.Color | string;
+  size?: number;
+  pulseSpeed?: number;
+  onClick?: (data: any) => void;
+  isActive?: boolean;
+  data?: any;
 }
 
 /**

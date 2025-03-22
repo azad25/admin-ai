@@ -1,9 +1,37 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
+import * as THREE from 'three';
 import { AIGlobeProps } from './types';
 import { Globe } from './Globe';
 import { InfoBox } from './InfoBox';
+import styled from 'styled-components';
+
+// Error boundary to handle WebGL rendering issues
+class WebGLErrorBoundary extends React.Component<
+  { children: React.ReactNode, fallback: React.ReactNode },
+  { hasError: boolean }
+> {
+  constructor(props: { children: React.ReactNode, fallback: React.ReactNode }) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error('WebGL rendering error:', error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return this.props.fallback;
+    }
+    return this.props.children;
+  }
+}
 
 /**
  * AIGlobe component - Main entry point for the 3D globe visualization
@@ -18,6 +46,36 @@ import { InfoBox } from './InfoBox';
 export const AIGlobe: React.FC<AIGlobeProps> = ({ data, size = 400 }) => {
   // State for tracking which info box is active/expanded
   const [activeInfoBox, setActiveInfoBox] = useState<string | null>(null);
+  // State to track WebGL support
+  const [isWebGLSupported, setIsWebGLSupported] = useState(true);
+  // State to force remount of canvas on error
+  const [canvasKey, setCanvasKey] = useState(0);
+  
+  // Check for WebGL support on mount
+  useEffect(() => {
+    try {
+      const canvas = document.createElement('canvas');
+      const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+      setIsWebGLSupported(!!gl);
+    } catch (e) {
+      console.error('WebGL detection error:', e);
+      setIsWebGLSupported(false);
+    }
+
+    // Set up error handler for WebGL context loss
+    const handleError = (event: ErrorEvent) => {
+      if (event.message.includes('WebGL') || event.message.includes('uniform')) {
+        console.warn('WebGL error detected, attempting recovery by remounting canvas');
+        setCanvasKey(prev => prev + 1);
+      }
+    };
+
+    window.addEventListener('error', handleError);
+    
+    return () => {
+      window.removeEventListener('error', handleError);
+    };
+  }, []);
   
   // If no data is provided, generate sample data with global coverage (more points to match reference image)
   const globeData = data.length > 0 ? data : [
@@ -58,8 +116,40 @@ export const AIGlobe: React.FC<AIGlobeProps> = ({ data, size = 400 }) => {
     setActiveInfoBox(activeInfoBox === id ? null : id);
   };
 
+  const Container = styled.div`
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(135deg, #040c1e 0%, #0a1c3f 50%, #091632 100%);
+    overflow: hidden;
+  `;
+
+  const ErrorMessage = styled.div`
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: #44ccff;
+    background: rgba(4, 12, 30, 0.8);
+    padding: 20px;
+    border-radius: 8px;
+    border: 1px solid #44ccff;
+    text-align: center;
+    max-width: 80%;
+    box-shadow: 0 0 20px rgba(68, 204, 255, 0.5);
+  `;
+
+  // Fallback UI when WebGL fails
+  const renderFallback = () => (
+    <ErrorMessage>
+      <h3>3D Globe Visualization Unavailable</h3>
+      <p>Your browser doesn't support WebGL or the WebGL context was lost.</p>
+      <p>Please try refreshing the page or using a different browser.</p>
+    </ErrorMessage>
+  );
+
   return (
-    <div style={{ position: 'relative', width: '100%', height: size }}>
+    <Container>
       {/* Information boxes around the globe */}
       <InfoBox
         title="Global Activity"
@@ -125,27 +215,79 @@ export const AIGlobe: React.FC<AIGlobeProps> = ({ data, size = 400 }) => {
         isActive={activeInfoBox === 'performance'}
       />
       
-      <Canvas
-        camera={{ position: [0, 0, 6.5], fov: 38 }}
-        style={{ width: '100%', height: '100%' }}
-        gl={{ antialias: true, alpha: false }}
-      >
-        {/* Only one circle (Earth) */}
-        <Globe data={globeData} size={2} />
-        <OrbitControls
-          enableZoom={true}
-          zoomSpeed={0.5}
-          enablePan={false}
-          minDistance={2 * 1.4}
-          maxDistance={2 * 5}
-          minPolarAngle={Math.PI / 3.5}
-          maxPolarAngle={Math.PI - Math.PI / 3.5}
-          autoRotate
-          autoRotateSpeed={0.25}
-          enableDamping
-          dampingFactor={0.08}
-        />
-      </Canvas>
-    </div>
+      {!isWebGLSupported ? renderFallback() : (
+        <WebGLErrorBoundary fallback={renderFallback()}>
+          <Canvas
+            key={canvasKey}
+            camera={{ position: [0, 0, 5], fov: 40 }}
+            style={{ 
+              width: '100%', 
+              height: '100%', 
+              background: 'linear-gradient(180deg, #050d20 0%, #071630 100%)'
+            }}
+            gl={{ 
+              antialias: true, 
+              alpha: false,
+              powerPreference: 'high-performance',
+              stencil: false,
+              depth: true
+            }}
+            onCreated={({ gl, scene }) => {
+              // Set additional WebGL renderer attributes for improved performance
+              gl.shadowMap.enabled = false; // Disable shadows for performance
+              gl.pixelRatio = Math.min(window.devicePixelRatio, 2); // Cap pixel ratio for performance
+              
+              // Set background scene for better atmosphere
+              scene.background = new THREE.Color('#030a1c');
+              
+              // Add handler for context loss/restoration
+              const canvas = gl.domElement;
+              
+              canvas.addEventListener('webglcontextlost', (event) => {
+                console.warn('WebGL context lost', event);
+                event.preventDefault();
+                // Force remount on next render cycle
+                setTimeout(() => setCanvasKey(prev => prev + 1), 100);
+              }, false);
+              
+              canvas.addEventListener('webglcontextrestored', () => {
+                console.log('WebGL context restored - reloading scene');
+              }, false);
+            }}
+          >
+            {/* Only one circle (Earth) */}
+            <Globe 
+              data={globeData} 
+              size={2} 
+              activePoint={activeInfoBox}
+              onPointClick={(pointData) => {
+                // Handle point click by updating the active info box
+                const pointId = pointData?.id || pointData?.city;
+                if (pointId) {
+                  handleInfoBoxClick(pointId.toString());
+                }
+              }}
+            />
+            <OrbitControls
+              enableZoom={true}
+              zoomSpeed={0.5}
+              enablePan={false}
+              minDistance={2 * 1.2}
+              maxDistance={2 * 4}
+              minPolarAngle={Math.PI / 3.5}
+              maxPolarAngle={Math.PI - Math.PI / 3.5}
+              autoRotate
+              autoRotateSpeed={0.2}
+              enableDamping
+              dampingFactor={0.08}
+            />
+            {/* Add fog to create depth */}
+            <fog attach="fog" args={['#030a1c', 7, 15]} />
+            {/* Add ambient light for better visibility */}
+            <ambientLight intensity={0.3} color="#4488ff" />
+          </Canvas>
+        </WebGLErrorBoundary>
+      )}
+    </Container>
   );
 };
