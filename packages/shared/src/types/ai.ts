@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { LLMProvider } from './common.js';
+import { SystemHealth, SystemMetrics } from './metrics';
 
 export type { LLMProvider };
 
@@ -13,6 +14,12 @@ export interface AIProviderConfig {
   lastVerified?: Date;
   settings?: Record<string, any>;
   userId?: string;
+  name: string;
+  type: 'openai' | 'anthropic' | 'custom';
+  model: string;
+  maxTokens: number;
+  temperature: number;
+  enabled: boolean;
 }
 
 export interface AIMessageMetadata {
@@ -142,10 +149,11 @@ export interface AIAnalysis {
 }
 
 export interface AIAnalysisResult {
-  summary: string;
+  insights: string[];
   recommendations: string[];
+  actions: AIAction[];
   confidence: number;
-  details: Record<string, any>;
+  timestamp: string;
 }
 
 export type ResourceStatus = 'critical' | 'warning' | 'normal';
@@ -186,4 +194,75 @@ export interface RequestMetric {
     city: string;
   };
   duration: number;
+}
+
+export interface AISuggestion {
+  type: 'performance' | 'security' | 'reliability' | 'maintenance';
+  priority: 'high' | 'medium' | 'low';
+  description: string;
+  impact: string;
+  implementation: string;
+  timestamp: string;
+}
+
+export interface AIAction {
+  type: 'optimize' | 'investigate' | 'scale' | 'alert';
+  target: string;
+  parameters: Record<string, any>;
+  priority: 'high' | 'medium' | 'low';
+  status: 'pending' | 'completed' | 'failed';
+  result?: any;
+  error?: string;
+  timestamp: string;
+}
+
+export interface AIAnalysisContext {
+  systemHealth: {
+    status: 'healthy' | 'warning' | 'critical';
+    metrics: Record<string, number>;
+  };
+  metrics: {
+    performance: {
+      responseTime: number;
+      throughput: number;
+      errorRate: number;
+    };
+    resources: {
+      cpuUsage: number;
+      memoryUsage: number;
+      diskUsage: number;
+    };
+    security: {
+      threatCount: number;
+      vulnerabilityCount: number;
+    };
+  };
+  recentActions: AIAction[];
+  suggestions: AISuggestion[];
+  systemState: Record<string, any>;
+}
+
+export interface AIOperationResult {
+  success: boolean;
+  data?: any;
+  error?: string;
+  timestamp: string;
+}
+
+export interface AIFileAccess {
+  path: string;
+  operation: 'read' | 'write' | 'delete';
+  content?: string;
+  metadata?: Record<string, any>;
+  timestamp: string;
+}
+
+export interface AISystemDiagnostic {
+  category: 'performance' | 'security' | 'reliability' | 'maintenance';
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  description: string;
+  impact: string;
+  recommendations: string[];
+  metrics: Record<string, number>;
+  timestamp: string;
 }

@@ -20,6 +20,7 @@ import type { SystemHealth, SystemMetrics } from '@admin-ai/shared/src/types/met
 import type { ErrorLog } from '@admin-ai/shared/src/types/error';
 import type { WebSocketEvents } from '@admin-ai/shared/src/types/websocket';
 import { checkDiskSpace } from '../utils/diskSpaceChecker';
+import { KafkaService } from './kafka.service';
 
 interface AuthLog {
   timestamp: string;
@@ -406,44 +407,48 @@ export class SystemMetricsService extends EventEmitter {
 
       // Publish to Kafka if available
       if (this.kafkaService) {
-        await this.kafkaService.publishSystemMetrics({
-          health: responseHealth,
-          metrics: completeMetrics
-        });
-        
-        // Also publish individual updates for specific widgets
-        await this.kafkaService.publishDashboardUpdate('health', responseHealth);
-        await this.kafkaService.publishDashboardUpdate('metrics', metrics);
-        await this.kafkaService.publishDashboardUpdate('logs', recentLogs);
-        await this.kafkaService.publishDashboardUpdate('errors', errorLogs);
-        await this.kafkaService.publishDashboardUpdate('auth', authLogs);
-        await this.kafkaService.publishDashboardUpdate('requests', requestMetrics);
-        await this.kafkaService.publishDashboardUpdate('locations', locations);
-      }
-      
-      // Also broadcast directly via WebSocket for immediate updates
-      if (this.wsService) {
-        this.wsService.broadcast('metrics:update', {
-          health: responseHealth,
-          metrics: completeMetrics,
-          timestamp: new Date().toISOString()
-        });
-        
-        this.wsService.broadcast('metrics:status', {
-          health: responseHealth,
-          metrics: completeMetrics,
-          timestamp: new Date().toISOString()
-        });
-        this.wsService.broadcast('metrics:update', {
-          health: responseHealth,
-          metrics: completeMetrics,
-          timestamp: new Date().toISOString()
-        });
+        await this.publishMetrics(completeMetrics, responseHealth);
       }
       
       logger.debug('Collected and published metrics data');
     } catch (error) {
       logger.error('Error collecting and publishing metrics:', error);
+    }
+  }
+
+  private async publishMetrics(metrics: SystemMetrics, health: SystemHealth): Promise<void> {
+    try {
+      const kafkaService = KafkaService.getInstance();
+      if (!kafkaService.isConnected()) {
+        logger.debug('Kafka service not connected, skipping metrics publication');
+        return;
+      }
+
+      // Add timestamp to the metrics
+      const timestamp = new Date().toISOString();
+      const metricsData = {
+        health,
+        metrics,
+        timestamp
+      };
+
+      // Publish metrics to Kafka
+      await kafkaService.publishSystemMetrics(metricsData);
+      await kafkaService.publishDashboardUpdate('health_update', metricsData);
+      await kafkaService.publishDashboardUpdate('metrics_update', metricsData);
+      await kafkaService.publishDashboardUpdate('logs_update', metricsData);
+      await kafkaService.publishDashboardUpdate('errors_update', metricsData);
+      await kafkaService.publishDashboardUpdate('auth_update', metricsData);
+      await kafkaService.publishDashboardUpdate('requests_update', metricsData);
+      await kafkaService.publishDashboardUpdate('locations_update', metricsData);
+
+      // Broadcast metrics via WebSocket if available
+      if (this.wsService?.isInitialized()) {
+        this.wsService.broadcast('metrics_update', metricsData);
+      }
+    } catch (error) {
+      // Log error but don't throw to prevent metrics collection from failing
+      logger.warn('Failed to publish metrics:', error);
     }
   }
 
@@ -493,23 +498,25 @@ export class SystemMetricsService extends EventEmitter {
   private async getQueueHealth(): Promise<ServiceHealth> {
     try {
       // Check queue connection (if using Kafka)
-      if (this.kafkaService && await this.kafkaService.isConnected()) {
+      if (this.kafkaService && this.kafkaService.isConnected()) {
         return {
           status: 'up',
           lastCheck: new Date().toISOString(),
           message: 'Queue is healthy'
         };
+      } else {
+        return {
+          status: 'degraded',
+          lastCheck: new Date().toISOString(),
+          message: 'Queue service is not connected'
+        };
       }
-      return {
-        status: 'down',
-        lastCheck: new Date().toISOString(),
-        message: 'Queue service not configured'
-      };
     } catch (error) {
+      logger.error('Error checking queue health:', error);
       return {
         status: 'down',
         lastCheck: new Date().toISOString(),
-        message: 'Queue connection failed'
+        message: error instanceof Error ? error.message : String(error)
       };
     }
   }

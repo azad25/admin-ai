@@ -22,6 +22,21 @@ import { EventEmitter } from 'events';
 import { v4 as uuidv4 } from 'uuid';
 import { ArrayContains } from 'typeorm';
 import { WebSocketEvents } from '@admin-ai/shared/src/types/websocket';
+import { DatabaseService } from './database.service';
+import { RedisService } from './redis.service';
+import { KafkaService } from './kafka.service';
+import { KAFKA_TOPICS } from '../config/kafka.config';
+import { REDIS_KEYS, REDIS_TTL } from '../config/redis.config';
+import { SystemHealth } from '@admin-ai/shared/types/metrics';
+import {
+  AIAnalysisResult,
+  AISuggestion,
+  AIAction,
+  AIAnalysisContext,
+  AIOperationResult,
+  AIFileAccess,
+  AISystemDiagnostic
+} from '@admin-ai/shared/types/ai';
 
 const aiSettingsRepository = AppDataSource.getRepository('AISettings');
 
@@ -42,7 +57,7 @@ interface EndpointStats {
 }
 
 export class AIService extends EventEmitter {
-  public static instance: AIService | null = null;
+  private static instance: AIService;
   private isInitialized: boolean = false;
   private isBaseInitialized: boolean = false;
   private providersInitialized: boolean = false;
@@ -78,9 +93,26 @@ export class AIService extends EventEmitter {
   private lastReadyStatus: boolean = false;
   private providers: AIProviderConfig[] = [];
   private status: string = 'idle';
+  private dbService: DatabaseService;
+  private redisService: RedisService;
+  private kafkaService: KafkaService;
+  private llmProvider: any; // Replace with actual LLM provider type
+  private readonly logger = logger;
+  private readonly CACHE_TTL = 3600; // 1 hour
 
   constructor() {
     super();
+    this.dbService = DatabaseService.getInstance();
+    this.redisService = RedisService.getInstance();
+    this.kafkaService = KafkaService.getInstance();
+    // Initialize LLM provider here
+  }
+
+  public static getInstance(): AIService {
+    if (!AIService.instance) {
+      AIService.instance = new AIService();
+    }
+    return AIService.instance;
   }
 
   public setAISettingsService(service: AISettingsService) {
@@ -834,6 +866,429 @@ Generate a response that:
   public async generateDashboardSuggestions(dataset: any): Promise<any> {
     // Implementation will be added later
     return null;
+  }
+
+  public async analyzeSystemHealth(context: AIAnalysisContext): Promise<AIAnalysisResult> {
+    try {
+      // Check cache first
+      const cachedResult = await this.redisService.get<AIAnalysisResult>(REDIS_KEYS.AI.ANALYSIS);
+      if (cachedResult) {
+        return cachedResult;
+      }
+
+      // Perform AI analysis
+      const analysis = await this.performAIAnalysis(context);
+      
+      // Cache the result
+      await this.redisService.setWithTTL(
+        REDIS_KEYS.AI.ANALYSIS,
+        analysis,
+        REDIS_TTL.AI_ANALYSIS
+      );
+
+      // Publish analysis to Kafka
+      await this.kafkaService.sendMessage('AI_OPERATIONS', {
+        type: 'analysis',
+        data: analysis,
+        timestamp: new Date().toISOString()
+      });
+
+      return analysis;
+    } catch (error) {
+      logger.error('Failed to analyze system health:', error);
+      throw error;
+    }
+  }
+
+  public async generateSuggestions(analysis: AIAnalysisResult): Promise<AISuggestion[]> {
+    try {
+      // Check cache first
+      const cachedSuggestions = await this.redisService.get<AISuggestion[]>(REDIS_KEYS.AI.SUGGESTIONS);
+      if (cachedSuggestions) {
+        return cachedSuggestions;
+      }
+
+      // Generate suggestions using LLM
+      const suggestions = await this.generateAISuggestions(analysis);
+      
+      // Cache the suggestions
+      await this.redisService.setWithTTL(
+        REDIS_KEYS.AI.SUGGESTIONS,
+        suggestions,
+        REDIS_TTL.AI_ANALYSIS
+      );
+
+      // Store suggestions in SQLite
+      await this.storeSuggestions(suggestions);
+
+      // Publish suggestions to Kafka
+      await this.kafkaService.sendMessage('AI_OPERATIONS', {
+        type: 'suggestions',
+        data: suggestions,
+        timestamp: new Date().toISOString()
+      });
+
+      return suggestions;
+    } catch (error) {
+      logger.error('Failed to generate suggestions:', error);
+      throw error;
+    }
+  }
+
+  public async executeAction(action: AIAction): Promise<AIOperationResult> {
+    try {
+      // Validate action
+      const isValid = await this.validateAction(action);
+      if (!isValid) {
+        throw new Error('Invalid action');
+      }
+
+      // Execute action
+      const result = await this.performAction(action);
+
+      // Log action in SQLite
+      await this.logAction(action, result);
+
+      // Publish action result to Kafka
+      await this.kafkaService.sendMessage('AI_OPERATIONS', {
+        type: 'action',
+        data: { action, result },
+        timestamp: new Date().toISOString()
+      });
+
+      return result;
+    } catch (error) {
+      logger.error('Failed to execute action:', error);
+      throw error;
+    }
+  }
+
+  private async performAIAnalysis(context: AIAnalysisContext): Promise<AIAnalysisResult> {
+    // Implement AI analysis logic here
+    // This should use the LLM provider to analyze system health and metrics
+    return {
+      insights: [],
+      recommendations: [],
+      actions: [],
+      confidence: 0,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  private async generateAISuggestions(analysis: AIAnalysisResult): Promise<AISuggestion[]> {
+    // Implement suggestion generation logic here
+    // This should use the LLM provider to generate suggestions based on analysis
+    return [];
+  }
+
+  private async validateAction(action: AIAction): Promise<boolean> {
+    // Implement action validation logic here
+    return true;
+  }
+
+  private async performAction(action: AIAction): Promise<AIOperationResult> {
+    // Implement action execution logic here
+    return {
+      success: true,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  private async storeSuggestions(suggestions: AISuggestion[]): Promise<void> {
+    const connection = this.dbService.getConnection('AI_ANALYSIS');
+    // Implement suggestion storage logic here
+  }
+
+  private async logAction(action: AIAction, result: AIOperationResult): Promise<void> {
+    const connection = this.dbService.getConnection('AI_ANALYSIS');
+    // Implement action logging logic here
+  }
+
+  async analyzeSystemHealth(metrics: SystemMetrics): Promise<AIAnalysisResult> {
+    const cacheKey = `ai:analysis:${Date.now()}`;
+    const cachedResult = await this.redisService.get(cacheKey);
+    if (cachedResult) {
+      return JSON.parse(cachedResult);
+    }
+
+    try {
+      // Perform AI analysis based on system metrics
+      const analysis: AIAnalysisResult = {
+        insights: this.generateInsights(metrics),
+        recommendations: this.generateRecommendations(metrics),
+        actions: this.generateActions(metrics),
+        confidence: this.calculateConfidence(metrics),
+        timestamp: new Date().toISOString()
+      };
+
+      // Save analysis to database
+      await this.analysisRepository.saveAnalysis(analysis);
+
+      // Cache the result
+      await this.redisService.set(cacheKey, JSON.stringify(analysis), this.CACHE_TTL);
+
+      // Publish analysis to Kafka
+      await this.kafkaService.publish('ai.analysis', analysis);
+
+      return analysis;
+    } catch (error) {
+      this.logger.error('Error analyzing system health:', error);
+      throw error;
+    }
+  }
+
+  async generateSuggestions(metrics: SystemMetrics): Promise<AISuggestion[]> {
+    try {
+      const suggestions: AISuggestion[] = this.analyzeMetricsForSuggestions(metrics);
+      
+      // Save suggestions to database
+      for (const suggestion of suggestions) {
+        await this.suggestionRepository.saveSuggestion(suggestion);
+      }
+
+      // Publish suggestions to Kafka
+      await this.kafkaService.publish('ai.suggestions', suggestions);
+
+      return suggestions;
+    } catch (error) {
+      this.logger.error('Error generating suggestions:', error);
+      throw error;
+    }
+  }
+
+  async executeAction(action: AIAction): Promise<AIAction> {
+    try {
+      // Save action to database
+      const savedAction = await this.actionRepository.saveAction(action);
+
+      // Execute the action based on its type
+      const result = await this.performAction(action);
+
+      // Update action status
+      await this.actionRepository.updateActionStatus(
+        savedAction.id,
+        'completed',
+        result
+      );
+
+      // Publish action result to Kafka
+      await this.kafkaService.publish('ai.action.result', {
+        actionId: savedAction.id,
+        result
+      });
+
+      return savedAction;
+    } catch (error) {
+      this.logger.error('Error executing action:', error);
+      
+      // Update action status to failed
+      await this.actionRepository.updateActionStatus(
+        action.id,
+        'failed',
+        undefined,
+        error.message
+      );
+
+      throw error;
+    }
+  }
+
+  async generateDiagnostics(metrics: SystemMetrics): Promise<AISystemDiagnostic[]> {
+    try {
+      const diagnostics: AISystemDiagnostic[] = this.analyzeMetricsForDiagnostics(metrics);
+      
+      // Save diagnostics to database
+      for (const diagnostic of diagnostics) {
+        await this.diagnosticRepository.saveDiagnostic(diagnostic);
+      }
+
+      // Publish diagnostics to Kafka
+      await this.kafkaService.publish('ai.diagnostics', diagnostics);
+
+      return diagnostics;
+    } catch (error) {
+      this.logger.error('Error generating diagnostics:', error);
+      throw error;
+    }
+  }
+
+  private generateInsights(metrics: SystemMetrics): string[] {
+    const insights: string[] = [];
+    
+    // Analyze performance metrics
+    if (metrics.performance?.averageResponseTime > 1000) {
+      insights.push('High response times detected in the system');
+    }
+    
+    // Analyze error rates
+    if (metrics.errors?.errorRate > 0.05) {
+      insights.push('Elevated error rate detected');
+    }
+    
+    // Analyze resource usage
+    if (metrics.resources?.cpuUsage > 80) {
+      insights.push('High CPU usage detected');
+    }
+    
+    return insights;
+  }
+
+  private generateRecommendations(metrics: SystemMetrics): string[] {
+    const recommendations: string[] = [];
+    
+    // Generate performance recommendations
+    if (metrics.performance?.averageResponseTime > 1000) {
+      recommendations.push('Consider implementing caching for frequently accessed data');
+    }
+    
+    // Generate error handling recommendations
+    if (metrics.errors?.errorRate > 0.05) {
+      recommendations.push('Review error handling and logging mechanisms');
+    }
+    
+    // Generate resource optimization recommendations
+    if (metrics.resources?.cpuUsage > 80) {
+      recommendations.push('Consider scaling resources or optimizing resource usage');
+    }
+    
+    return recommendations;
+  }
+
+  private generateActions(metrics: SystemMetrics): AIAction[] {
+    const actions: AIAction[] = [];
+    
+    // Generate performance actions
+    if (metrics.performance?.averageResponseTime > 1000) {
+      actions.push({
+        type: 'optimize',
+        target: 'performance',
+        parameters: { threshold: 1000 },
+        priority: 'high',
+        status: 'pending',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Generate error handling actions
+    if (metrics.errors?.errorRate > 0.05) {
+      actions.push({
+        type: 'investigate',
+        target: 'errors',
+        parameters: { threshold: 0.05 },
+        priority: 'high',
+        status: 'pending',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    return actions;
+  }
+
+  private calculateConfidence(metrics: SystemMetrics): number {
+    let confidence = 0.8; // Base confidence
+    
+    // Adjust confidence based on data quality
+    if (metrics.performance?.dataPoints < 100) {
+      confidence *= 0.9;
+    }
+    
+    if (metrics.errors?.dataPoints < 50) {
+      confidence *= 0.9;
+    }
+    
+    return Math.min(confidence, 1);
+  }
+
+  private analyzeMetricsForSuggestions(metrics: SystemMetrics): AISuggestion[] {
+    const suggestions: AISuggestion[] = [];
+    
+    // Analyze performance metrics
+    if (metrics.performance?.averageResponseTime > 1000) {
+      suggestions.push({
+        type: 'performance',
+        priority: 'high',
+        description: 'System response times are above optimal threshold',
+        impact: 'User experience degradation',
+        implementation: 'Implement caching and optimize database queries',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Analyze error rates
+    if (metrics.errors?.errorRate > 0.05) {
+      suggestions.push({
+        type: 'reliability',
+        priority: 'high',
+        description: 'Error rate exceeds acceptable threshold',
+        impact: 'System reliability issues',
+        implementation: 'Review error handling and add monitoring',
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    return suggestions;
+  }
+
+  private analyzeMetricsForDiagnostics(metrics: SystemMetrics): AISystemDiagnostic[] {
+    const diagnostics: AISystemDiagnostic[] = [];
+    
+    // Analyze performance metrics
+    if (metrics.performance?.averageResponseTime > 1000) {
+      diagnostics.push({
+        category: 'performance',
+        severity: 'high',
+        description: 'High response times detected',
+        impact: 'Degraded user experience',
+        recommendations: ['Implement caching', 'Optimize database queries'],
+        metrics: { responseTime: metrics.performance.averageResponseTime },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    // Analyze error rates
+    if (metrics.errors?.errorRate > 0.05) {
+      diagnostics.push({
+        category: 'reliability',
+        severity: 'high',
+        description: 'High error rate detected',
+        impact: 'System instability',
+        recommendations: ['Review error handling', 'Add monitoring'],
+        metrics: { errorRate: metrics.errors.errorRate },
+        timestamp: new Date().toISOString()
+      });
+    }
+    
+    return diagnostics;
+  }
+
+  private async performAction(action: AIAction): Promise<any> {
+    // Implement action execution logic based on action type
+    switch (action.type) {
+      case 'optimize':
+        return this.executeOptimization(action);
+      case 'investigate':
+        return this.executeInvestigation(action);
+      default:
+        throw new Error(`Unsupported action type: ${action.type}`);
+    }
+  }
+
+  private async executeOptimization(action: AIAction): Promise<any> {
+    // Implement optimization logic
+    return {
+      status: 'completed',
+      message: `Optimization completed for ${action.target}`,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  private async executeInvestigation(action: AIAction): Promise<any> {
+    // Implement investigation logic
+    return {
+      status: 'completed',
+      message: `Investigation completed for ${action.target}`,
+      timestamp: new Date().toISOString()
+    };
   }
 }
 

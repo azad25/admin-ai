@@ -264,12 +264,17 @@ export const Globe: React.FC<GlobeProps> = ({
         power: { value: 3.0 }
       },
       vertexShader: `
+        uniform float time;
         varying vec3 vNormal;
         varying vec3 vPosition;
+        varying vec3 vCameraWorldPosition;
+        varying vec3 vVertexWorldPosition;
         
         void main() {
           vNormal = normalize(normalMatrix * normal);
           vPosition = (modelViewMatrix * vec4(position, 1.0)).xyz;
+          vVertexWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+          vCameraWorldPosition = cameraPosition; // Three.js provides this
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
       `,
@@ -281,6 +286,8 @@ export const Globe: React.FC<GlobeProps> = ({
         
         varying vec3 vNormal;
         varying vec3 vPosition;
+        varying vec3 vCameraWorldPosition;
+        varying vec3 vVertexWorldPosition;
         
         void main() {
           // Calculate the vector from vertex to camera
@@ -468,6 +475,93 @@ export const Globe: React.FC<GlobeProps> = ({
       }
     }
   });
+  
+  // Add cleanup for WebGL resources
+  useEffect(() => {
+    return () => {
+      // Helper function to dispose of materials
+      const disposeMaterial = (material: THREE.Material) => {
+        if (!material) return;
+        
+        // Check and dispose standard material textures
+        if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshPhysicalMaterial) {
+          if (material.map) material.map.dispose();
+          if (material.normalMap) material.normalMap.dispose();
+          if (material.emissiveMap) material.emissiveMap.dispose();
+          if (material.bumpMap) material.bumpMap.dispose();
+          if (material.envMap) material.envMap.dispose();
+          if (material.lightMap) material.lightMap.dispose();
+          if (material.alphaMap) material.alphaMap.dispose();
+          if (material.aoMap) material.aoMap.dispose();
+          if (material.displacementMap) material.displacementMap.dispose();
+          if (material.metalnessMap) material.metalnessMap.dispose();
+          if (material.roughnessMap) material.roughnessMap.dispose();
+        }
+        
+        // Check phong material textures
+        if (material instanceof THREE.MeshPhongMaterial) {
+          if (material.map) material.map.dispose();
+          if (material.normalMap) material.normalMap.dispose();
+          if (material.specularMap) material.specularMap.dispose();
+          if (material.emissiveMap) material.emissiveMap.dispose();
+          if (material.bumpMap) material.bumpMap.dispose();
+          if (material.envMap) material.envMap.dispose();
+          if (material.lightMap) material.lightMap.dispose();
+          if (material.alphaMap) material.alphaMap.dispose();
+          if (material.aoMap) material.aoMap.dispose();
+          if (material.displacementMap) material.displacementMap.dispose();
+        }
+        
+        // Check basic material textures
+        if (material instanceof THREE.MeshBasicMaterial) {
+          if (material.map) material.map.dispose();
+          if (material.alphaMap) material.alphaMap.dispose();
+          if (material.aoMap) material.aoMap.dispose();
+          if (material.envMap) material.envMap.dispose();
+          if (material.lightMap) material.lightMap.dispose();
+          if (material.specularMap) material.specularMap.dispose();
+        }
+        
+        // Dispose uniforms textures if it's a ShaderMaterial
+        if (material instanceof THREE.ShaderMaterial && material.uniforms) {
+          Object.values(material.uniforms).forEach(uniform => {
+            if (uniform.value instanceof THREE.Texture) {
+              uniform.value.dispose();
+            }
+          });
+        }
+        
+        // Finally dispose the material
+        material.dispose();
+      };
+      
+      // Dispose textures loaded in the component
+      Object.values(textures).forEach(texture => {
+        if (texture) texture.dispose();
+      });
+      
+      // Dispose materials defined in the component
+      if (earthShaderMaterial) earthShaderMaterial.dispose();
+      if (atmosphereMaterial) atmosphereMaterial.dispose();
+      
+      // Recursively dispose materials and geometries in the scene
+      if (globeRef.current) {
+        globeRef.current.traverse(object => {
+          if (object instanceof THREE.Mesh) {
+            if (object.geometry) object.geometry.dispose();
+            
+            if (object.material) {
+              if (Array.isArray(object.material)) {
+                object.material.forEach(disposeMaterial);
+              } else {
+                disposeMaterial(object.material);
+              }
+            }
+          }
+        });
+      }
+    };
+  }, []);
   
   return (
     <group ref={globeRef}>

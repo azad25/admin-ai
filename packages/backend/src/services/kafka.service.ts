@@ -1,7 +1,9 @@
-import { Kafka, Producer, Consumer, EachMessagePayload } from 'kafkajs';
+import { Kafka, Producer, Consumer, EachMessagePayload, Partitioners } from 'kafkajs';
 import { logger } from '../utils/logger';
 import { WebSocketService, getWebSocketService } from './websocket.service';
 import { AIMessage } from '@admin-ai/shared/src/types/ai';
+import { KAFKA_CONFIG, KAFKA_TOPICS, KAFKA_CONSUMER_GROUPS } from '../config/kafka.config';
+import { Logger } from '@nestjs/common';
 
 export interface KafkaMessage {
   type: string;
@@ -32,28 +34,25 @@ export type MessageHandler = (message: any) => Promise<void>;
 
 export class KafkaService {
   private static instance: KafkaService;
-  private kafka: Kafka;
+  private readonly kafka: Kafka;
   private producer: Producer;
   private consumers: Map<string, Consumer> = new Map();
   private handlers: Map<string, MessageHandler> = new Map();
-  private isConnected = false;
+  private connectionActive = false;
   private wsService?: WebSocketService;
+  private isInitialized = false;
+  private readonly logger = new Logger(KafkaService.name);
 
   private constructor() {
     this.kafka = new Kafka({
       clientId: 'admin-ai',
       brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
       ssl: process.env.KAFKA_SSL === 'true',
-      sasl: process.env.KAFKA_SASL_USERNAME ? {
+      sasl: process.env.KAFKA_SASL === 'true' ? {
         mechanism: 'plain',
-        username: process.env.KAFKA_SASL_USERNAME,
-        password: process.env.KAFKA_SASL_PASSWORD || '',
-      } : undefined,
-    });
-
-    this.producer = this.kafka.producer({
-      allowAutoTopicCreation: true,
-      transactionTimeout: 30000,
+        username: process.env.KAFKA_USERNAME || '',
+        password: process.env.KAFKA_PASSWORD || ''
+      } : undefined
     });
   }
 
@@ -64,29 +63,81 @@ export class KafkaService {
     return KafkaService.instance;
   }
 
+  public isConnected(): boolean {
+    return this.connectionActive;
+  }
+
   public setWebSocketService(wsService: WebSocketService) {
     this.wsService = wsService;
     logger.info('WebSocket service set in KafkaService');
   }
 
-  public async connect(): Promise<void> {
+  public async initialize(): Promise<void> {
+    if (this.isInitialized) {
+      return;
+    }
+
     try {
-      await this.producer.connect();
-      this.isConnected = true;
-      logger.info('Connected to Kafka');
+      // Initialize producer with LegacyPartitioner
+      this.producer = this.kafka.producer({
+        createPartitioner: Partitioners.LegacyPartitioner,
+        retry: {
+          initialRetryTime: 100,
+          retries: 8
+        }
+      });
+      
+      // Connect producer with retry logic
+      let retryCount = 0;
+      const maxRetries = 3;
+      const retryDelay = 1000; // 1 second
+
+      while (retryCount < maxRetries) {
+        try {
+          await this.producer.connect();
+          this.connectionActive = true;
+          logger.info('Kafka producer connected successfully');
+          break;
+        } catch (error) {
+          retryCount++;
+          if (retryCount === maxRetries) {
+            throw error;
+          }
+          logger.warn(`Failed to connect to Kafka (attempt ${retryCount}/${maxRetries}), retrying in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
+      }
+
+      // Initialize consumers for AI events with proper timeout
+      await this.initializeConsumers();
+      this.isInitialized = true;
     } catch (error) {
-      logger.error('Failed to connect to Kafka:', error);
+      logger.error('Error initializing Kafka:', error);
       throw error;
+    }
+  }
+
+  public async connect(): Promise<void> {
+    if (!this.isInitialized) {
+      await this.initialize();
+    } else if (!this.connectionActive) {
+      await this.producer.connect();
+      this.connectionActive = true;
+      logger.info('Kafka producer reconnected successfully');
     }
   }
 
   public async disconnect(): Promise<void> {
     try {
-      await this.producer.disconnect();
+      if (this.producer) {
+        await this.producer.disconnect();
+      }
       for (const consumer of this.consumers.values()) {
         await consumer.disconnect();
       }
-      this.isConnected = false;
+      this.consumers.clear();
+      this.connectionActive = false;
+      this.isInitialized = false;
       logger.info('Disconnected from Kafka');
     } catch (error) {
       logger.error('Failed to disconnect from Kafka:', error);
@@ -95,22 +146,18 @@ export class KafkaService {
   }
 
   public async publish(topic: string, message: any): Promise<void> {
-    if (!this.isConnected) {
+    if (!this.connectionActive) {
       throw new Error('Kafka service is not connected');
     }
 
     try {
       await this.producer.send({
         topic,
-        messages: [
-          {
-            value: JSON.stringify(message),
-            timestamp: Date.now().toString(),
-          },
-        ],
+        messages: [{ value: JSON.stringify(message) }]
       });
+      this.logger.debug(`Message published to topic ${topic}`);
     } catch (error) {
-      logger.error(`Failed to publish message to topic ${topic}:`, error);
+      this.logger.error(`Error publishing message to topic ${topic}:`, error);
       throw error;
     }
   }
@@ -158,14 +205,14 @@ export class KafkaService {
             const parsedMessage = JSON.parse(message.value.toString());
             await handler(parsedMessage);
           } catch (error) {
-            logger.error('Error processing Kafka message:', error);
+            this.logger.error(`Error processing message from topic ${topic}:`, error);
           }
         },
       });
 
-      logger.info(`Subscribed to Kafka topic: ${topic}`);
+      this.logger.log(`Subscribed to topic ${topic}`);
     } catch (error) {
-      logger.error(`Failed to subscribe to topic ${topic}:`, error);
+      this.logger.error(`Error subscribing to topic ${topic}:`, error);
       throw error;
     }
   }
@@ -180,15 +227,15 @@ export class KafkaService {
       await consumer.disconnect();
       this.consumers.delete(topic);
       this.handlers.delete(topic);
-      logger.info(`Unsubscribed from Kafka topic: ${topic}`);
+      this.logger.log(`Unsubscribed from topic ${topic}`);
     } catch (error) {
-      logger.error(`Failed to unsubscribe from topic ${topic}:`, error);
+      this.logger.error(`Error unsubscribing from topic ${topic}:`, error);
       throw error;
     }
   }
 
   public isReady(): boolean {
-    return this.isConnected;
+    return this.connectionActive;
   }
 
   // Helper method to create standard topics
@@ -554,6 +601,125 @@ export class KafkaService {
     } catch (error) {
       logger.error(`Failed to publish dashboard ${type} update to Kafka:`, error);
     }
+  }
+
+  public async sendMessage(topic: keyof typeof KAFKA_TOPICS, message: any): Promise<void> {
+    try {
+      await this.producer.send({
+        topic: KAFKA_TOPICS[topic],
+        messages: [{ value: JSON.stringify(message) }],
+      });
+      logger.debug(`Message sent to topic ${KAFKA_TOPICS[topic]}`);
+    } catch (error) {
+      logger.error(`Failed to send message to topic ${KAFKA_TOPICS[topic]}:`, error);
+      throw error;
+    }
+  }
+
+  public async createConsumer(groupId: keyof typeof KAFKA_CONSUMER_GROUPS, topics: Array<keyof typeof KAFKA_TOPICS>): Promise<Consumer> {
+    const consumer = this.kafka.consumer({ groupId: KAFKA_CONSUMER_GROUPS[groupId] });
+    
+    try {
+      await consumer.connect();
+      await Promise.all(
+        topics.map(topic => consumer.subscribe({ topic: KAFKA_TOPICS[topic] }))
+      );
+      this.consumers.set(groupId, consumer);
+      logger.info(`Kafka consumer created for group ${KAFKA_CONSUMER_GROUPS[groupId]}`);
+      return consumer;
+    } catch (error) {
+      logger.error(`Failed to create Kafka consumer for group ${KAFKA_CONSUMER_GROUPS[groupId]}:`, error);
+      throw error;
+    }
+  }
+
+  public async consumeMessages(
+    groupId: keyof typeof KAFKA_CONSUMER_GROUPS,
+    callback: (message: any) => Promise<void>
+  ): Promise<void> {
+    const consumer = this.consumers.get(groupId);
+    if (!consumer) {
+      throw new Error(`Consumer not found for group ${KAFKA_CONSUMER_GROUPS[groupId]}`);
+    }
+
+    try {
+      await consumer.run({
+        eachMessage: async ({ topic, partition, message }) => {
+          try {
+            const value = message.value?.toString();
+            if (value) {
+              await callback(JSON.parse(value));
+            }
+          } catch (error) {
+            logger.error(`Error processing message from topic ${topic}:`, error);
+          }
+        },
+      });
+    } catch (error) {
+      logger.error(`Failed to consume messages for group ${KAFKA_CONSUMER_GROUPS[groupId]}:`, error);
+      throw error;
+    }
+  }
+
+  private async initializeConsumers(): Promise<void> {
+    try {
+      // Initialize consumer for AI analysis events
+      const consumer = this.kafka.consumer({
+        groupId: 'admin-ai-ai.analysis',
+        sessionTimeout: 30000, // 30 seconds
+        heartbeatInterval: 3000, // 3 seconds
+        maxWaitTimeInMs: 1000, // 1 second
+        retry: {
+          initialRetryTime: 100,
+          retries: 8
+        }
+      });
+
+      await consumer.connect();
+      await consumer.subscribe({ topic: 'ai.analysis', fromBeginning: false });
+
+      await consumer.run({
+        eachMessage: async ({ topic, message }) => {
+          try {
+            if (!message.value) {
+              logger.warn(`Received empty message on topic ${topic}`);
+              return;
+            }
+
+            const data = JSON.parse(message.value.toString());
+            // Handle message...
+          } catch (error) {
+            logger.error(`Error processing message from topic ${topic}:`, error);
+          }
+        },
+      });
+
+      this.consumers.set('ai.analysis', consumer);
+      logger.info('Kafka consumer initialized successfully');
+    } catch (error) {
+      logger.error('Failed to initialize Kafka consumer:', error);
+      throw error;
+    }
+  }
+
+  private async handleAnalysisMessage(message: any): Promise<void> {
+    // Implement analysis message handling
+    this.logger.debug('Handling analysis message:', message);
+  }
+
+  private async handleSuggestionsMessage(message: any): Promise<void> {
+    // Implement suggestions message handling
+    this.logger.debug('Handling suggestions message:', message);
+  }
+
+  private async handleActionsMessage(message: any): Promise<void> {
+    // Implement actions message handling
+    this.logger.debug('Handling actions message:', message);
+  }
+
+  private async handleDiagnosticsMessage(message: any): Promise<void> {
+    // Implement diagnostics message handling
+    this.logger.debug('Handling diagnostics message:', message);
   }
 }
 

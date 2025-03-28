@@ -177,20 +177,35 @@ class AuthController {
       // Remove password from response
       const { password: _, ...userWithoutPassword } = user;
 
-      try {
-        // Initialize AI providers for the user
-        const aiService = req.app.get('aiService');
-        if (aiService) {
-          logger.info('Initializing AI providers for user after login', { userId: user.id });
-          await aiService.initializeProvidersForUser(user.id);
-          logger.info('AI providers initialized for user after login', { userId: user.id });
-        } else {
-          logger.warn('AI service not available for initialization after login', { userId: user.id });
+      // Log successful login
+      const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() || 
+                 req.socket.remoteAddress || 
+                 'unknown';
+      
+      systemMetricsService.logAuth({
+        timestamp: new Date().toISOString(),
+        userId: user.id,
+        action: 'login',
+        ip,
+        userAgent: req.headers['user-agent'] || 'unknown',
+        location: getLocationFromRequest(req)
+      });
+
+      // Initialize AI providers in the background
+      setImmediate(async () => {
+        try {
+          const aiService = req.app.get('aiService');
+          if (aiService) {
+            logger.info('Initializing AI providers for user after login', { userId: user.id });
+            await aiService.initializeProvidersForUser(user.id);
+            logger.info('AI providers initialized for user after login', { userId: user.id });
+          } else {
+            logger.warn('AI service not available for initialization after login', { userId: user.id });
+          }
+        } catch (error) {
+          logger.error('Failed to initialize AI providers for user:', error);
         }
-      } catch (error) {
-        // Log error but don't fail login
-        logger.error('Failed to initialize AI providers for user:', error);
-      }
+      });
 
       // Send notification for successful login
       this.wsService.sendToUser(user.id, 'ai:message', {
@@ -212,13 +227,38 @@ class AuthController {
         }
       });
 
-      // Send response
-      return res.status(200).json({
+      res.json({
         user: userWithoutPassword,
-        token
+        token,
       });
     } catch (error) {
-      return next(error);
+      // Send error notification if we have a user ID
+      if (error instanceof AppError && req.user?.id) {
+        this.wsService.sendToUser(req.user.id, 'ai:message', {
+          id: crypto.randomUUID(),
+          content: `Login failed: ${error.message}`,
+          role: 'system',
+          timestamp: new Date().toISOString(),
+          metadata: {
+            type: 'notification',
+            status: 'error',
+            category: 'auth',
+            source: {
+              page: 'Authentication',
+              controller: 'AuthController',
+              action: 'login'
+            },
+            timestamp: new Date().toISOString(),
+            read: false
+          }
+        });
+      }
+
+      if (error instanceof AppError) {
+        throw error;
+      }
+      logger.error('Error during login:', error);
+      throw new AppError(500, 'Failed to authenticate user');
     }
   };
 

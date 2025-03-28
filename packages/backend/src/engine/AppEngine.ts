@@ -11,12 +11,25 @@ import { HealthCheck } from './HealthCheck';
 import { ErrorMonitor } from './ErrorMonitor';
 import { Server as HTTPServer, createServer } from 'http';
 import { MonitoringService } from '../services/monitoring.service';
-import { kafkaService } from '../services/kafka.service';
-import { createApp } from '../app';
-import express, { Express, Request, Response, NextFunction } from 'express';
+import { KafkaService } from '../services/kafka.service';
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+import type { Express, Request, Response, NextFunction } from 'express';
 import { DataSource } from 'typeorm';
-import cors from 'cors';
-import helmet from 'helmet';
+import path from 'path';
+import { errorHandler } from '../middleware/errorHandler';
+import { requestTrackerMiddleware } from '../middleware/requestTracker';
+import { authMiddleware } from '../middleware/auth.middleware';
+import { createAuthRoutes } from '../routes/auth.routes';
+import { createAIRoutes } from '../routes/ai.routes';
+import { createMetricsRoutes } from '../routes/metrics.routes';
+import { createSettingsRoutes } from '../routes/settings.routes';
+import { createApiKeysRoutes } from '../routes/apiKeys.routes';
+import { createCrudRoutes } from '../routes/crud.routes';
+import { createHealthRoutes } from '../routes/health.routes';
+import configRoutes from '../routes/config.routes';
 
 interface ServiceStatus {
   isConnected: boolean;
@@ -105,29 +118,95 @@ export class AppEngine extends EventEmitter {
       this.app = app;
       
       // Add basic middleware
+      app.use(helmet());
       app.use(cors());
-      app.use(helmet({
-        contentSecurityPolicy: false
-      }));
       app.use(express.json());
-      
-      // Add a basic request handler to respond to requests before the full app is configured
-      app.use((req: Request, res: Response, next: NextFunction) => {
-        if (!this.isInitialized) {
-          res.status(503).json({ error: 'Server is starting up, please try again in a moment' });
-        } else {
-          next();
-        }
+
+      // Add a simple test endpoint
+      app.get('/test', (req: Request, res: Response) => {
+        res.json({ message: 'Backend server is working!' });
       });
-      
+
       // Create HTTP server with the Express app attached
       this.server = createServer(app);
-      
-      this.updateServiceStatus('server', true);
       logger.info('HTTP server created successfully');
+
+      // Store app engine instance in app
+      app.set('appEngine', this);
+
+      // Health check and config routes (public)
+      app.use('/health', createHealthRoutes());
+      app.use('/api/config', configRoutes);
+
+      // Initialize WebSocket service if not already initialized
+      if (!this.webSocketService) {
+        this.webSocketService = await WebSocketService.getInstance();
+        await this.webSocketService.initialize(this.server);
+        this.services.set('websocket', this.webSocketService);
+        this.updateServiceStatus('websocket', true);
+        logger.info('WebSocket service initialized successfully');
+      }
+
+      // Store WebSocket service in app
+      app.set('wsService', this.webSocketService);
+      logger.info('WebSocket service set in Express app');
+
+      // Public routes
+      app.use('/api/auth', createAuthRoutes(this.webSocketService));
+
+      // Protected routes
+      app.use('/api/', authMiddleware.requireAuth);
+      app.use('/api/ai', createAIRoutes(this.webSocketService));
+      app.use('/api/metrics', createMetricsRoutes(this.webSocketService));
+      app.use('/api/settings', createSettingsRoutes(this.webSocketService));
+      app.use('/api/keys', createApiKeysRoutes(this.webSocketService));
+      app.use('/api/crud', createCrudRoutes(this.webSocketService));
+      logger.info('All API routes mounted successfully');
+
+      // Error handling middleware must be last
+      app.use(errorHandler);
+
+      this.updateServiceStatus('server', true);
     } catch (error) {
       this.updateServiceStatus('server', false, error instanceof Error ? error.message : 'Unknown error');
-      logger.error('Failed to create HTTP server:', error);
+      logger.error('Failed to create server:', error);
+      throw error;
+    }
+  }
+
+  private async configureApp(): Promise<void> {
+    try {
+      if (!this.app) {
+        throw new Error('Express app has not been initialized');
+      }
+
+      // Set up WebSocket service in app
+      if (this.webSocketService) {
+        this.app.set('wsService', this.webSocketService);
+        logger.info('WebSocket service set in Express app');
+      }
+
+      // Set up AI service in app
+      if (this.aiService) {
+        this.app.set('aiService', this.aiService);
+        logger.info('AI service set in Express app');
+      }
+
+      // Handle static asset requests
+      this.app.get('*', (req: Request, res: Response) => {
+        if (req.url.match(/\.(ico|png|jpg|jpeg|gif|svg)$/)) {
+          res.sendFile(path.join(__dirname, '../../public', 'favicon.ico'));
+        } else {
+          res.sendStatus(404);
+        }
+      });
+
+      // Error handling middleware should be last
+      this.app.use(errorHandler);
+
+      logger.info('Express app configured successfully');
+    } catch (error) {
+      logger.error('Failed to configure Express app:', error);
       throw error;
     }
   }
@@ -147,25 +226,24 @@ export class AppEngine extends EventEmitter {
         // Initialize logging first
         await this.initializeLogging();
 
-        // Create HTTP server
-        await this.createServer();
-
         // Initialize core infrastructure
         await this.initializeDatabase();
         await this.initializeCache();
         await this.initializeAIStorage();
-        await this.initializeKafka();
-
-        // Initialize WebSocket service first
-        await this.initializeWebSocket();
         
-        // Initialize other services before configuring the app
+        // Create HTTP server and initialize WebSocket service
+        await this.createServer();
+        
+        // Initialize Kafka (doesn't depend on WebSocket)
+        await this.initializeKafka();
+        
+        // Then initialize services that depend on WebSocket
         await this.initializeAISettings();
         await this.initializeMonitoring();
         await this.initializeAI();
         await this.initializeSystemMetrics();
-        
-        // Configure Express app after all services are initialized
+
+        // Configure app after all services are initialized
         await this.configureApp();
 
         // Start monitoring
@@ -239,41 +317,26 @@ export class AppEngine extends EventEmitter {
 
   private async initializeKafka(): Promise<void> {
     try {
-      await kafkaService.connect();
+      const kafkaService = KafkaService.getInstance();
+      await kafkaService.initialize();
       logger.info('Kafka initialized successfully');
     } catch (error) {
       logger.warn('Failed to initialize Kafka, continuing without it:', error);
     }
   }
 
-  private async initializeWebSocket(): Promise<void> {
-    try {
-      if (!this.server) {
-        throw new Error('Server must be set before initializing WebSocket service');
-      }
-
-      const wsService = await WebSocketService.getInstance();
-      await wsService.initialize(this.server);
-      this.webSocketService = wsService;
-      this.updateServiceStatus('websocket', true);
-      logger.info('WebSocket service initialized');
-    } catch (error) {
-      this.updateServiceStatus('websocket', false, error instanceof Error ? error.message : 'Unknown error');
-      logger.error('Failed to initialize WebSocket service:', error);
-      throw error;
-    }
-  }
-
   private async initializeAISettings(): Promise<void> {
     try {
+      // Get instance and wait for initialization
       this.aiSettingsService = await AISettingsService.getInstance();
-      // Set the WebSocket service before initializing
+      
+      // Set the WebSocket service after initializing if available
       if (this.webSocketService) {
         this.aiSettingsService.setWebSocketService(this.webSocketService);
       } else {
-        logger.warn('WebSocketService not available when initializing AISettingsService');
+        logger.warn('WebSocketService not available when initializing AISettingsService - will connect later');
       }
-      await this.aiSettingsService.initialize();
+      
       this.services.set('aiSettings', this.aiSettingsService);
       this.updateServiceStatus('aiSettings', true);
       logger.info('AI Settings service initialized');
@@ -360,42 +423,6 @@ export class AppEngine extends EventEmitter {
       logger.info('System Metrics service initialized successfully');
     } catch (error) {
       logger.error('Failed to initialize System Metrics service:', error);
-      throw error;
-    }
-  }
-
-  private async configureApp(): Promise<void> {
-    try {
-      if (!this.server) throw new Error('Server not initialized');
-      
-      // Check if WebSocket service is initialized, if not, initialize it
-      if (!this.webSocketService) {
-        logger.warn('WebSocket service not initialized before configuring app, initializing now');
-        await this.initializeWebSocket();
-      }
-      
-      if (!this.webSocketService) {
-        throw new Error('Failed to initialize WebSocket service');
-      }
-      
-      // Create the Express app
-      const configuredApp = await createApp(this.webSocketService);
-      
-      // Replace the existing app with the configured one
-      if (this.app) {
-        // Remove all existing routes and middleware
-        this.app._router = null;
-      }
-      
-      this.app = configuredApp;
-      
-      // Attach the configured app to the server
-      this.server.removeAllListeners('request');
-      this.server.on('request', this.app);
-      
-      logger.info('Express app configured successfully');
-    } catch (error) {
-      logger.error('Failed to configure Express app:', error);
       throw error;
     }
   }
@@ -528,6 +555,16 @@ export class AppEngine extends EventEmitter {
         this.updateServiceStatus('database', false);
       }
 
+      // Close server if it exists
+      if (this.server) {
+        await new Promise<void>((resolve) => {
+          this.server!.close(() => {
+            logger.info('HTTP server closed');
+            resolve();
+          });
+        });
+      }
+
       logger.info('All services shut down successfully');
     } catch (error) {
       logger.error('Error during shutdown:', error);
@@ -581,9 +618,10 @@ export class AppEngine extends EventEmitter {
   }
 
   // Add getServer method
-  public getServer(): HTTPServer {
+  public getServer(): HTTPServer | null {
     if (!this.server) {
-      throw new Error('Server not initialized');
+      logger.error('HTTP server has not been initialized');
+      return null;
     }
     return this.server;
   }

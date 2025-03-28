@@ -1,62 +1,114 @@
 import type { ResourceStatus } from './ai.js';
 
 export interface SystemHealth {
-  timestamp: string;
+  id: string;
   score: number;
-  services: {
-    [key: string]: {
-      status: 'up' | 'down' | 'degraded';
-      lastCheck: string;
-      message?: string;
-    };
-  };
+  status: 'healthy' | 'warning' | 'critical';
   resources: {
     cpu: {
       usage: number;
-      status: 'critical' | 'warning' | 'normal';
+      status: 'normal' | 'warning' | 'critical';
     };
     memory: {
       usage: number;
-      status: 'critical' | 'warning' | 'normal';
+      status: 'normal' | 'warning' | 'critical';
     };
     disk: {
       usage: number;
-      status: 'critical' | 'warning' | 'normal';
+      status: 'normal' | 'warning' | 'critical';
+    };
+    network: {
+      status: 'normal' | 'warning' | 'critical';
     };
   };
+  services: Array<{
+    name: string;
+    status: 'up' | 'down' | 'degraded';
+    responseTime: number;
+  }>;
+  timestamp: string;
 }
 
 export interface SystemMetrics {
+  performance: {
+    averageResponseTime: number;
+    throughput: number;
+    errorRate: number;
+    dataPoints: number;
+  };
+  resources: {
+    cpuUsage: number;
+    memoryUsage: number;
+    diskUsage: number;
+    dataPoints: number;
+  };
+  errors: {
+    errorRate: number;
+    warningCount: number;
+    criticalCount: number;
+    dataPoints: number;
+  };
+  security: {
+    threatCount: number;
+    vulnerabilityCount: number;
+    dataPoints: number;
+  };
+  timestamp: string;
+}
+
+export interface PerformanceMetrics {
+  responseTime: number;
+  throughput: number;
+  errorRate: number;
+  dataPoints: number;
+}
+
+export interface ResourceMetrics {
   cpuUsage: number;
   memoryUsage: number;
-  diskUsage?: number;
-  errorCount: number;
-  totalRequests: number;
-  activeUsers: number;
-  averageResponseTime?: number;
-  warningCount?: number;
-  database?: {
-    active_connections: number;
+  diskUsage: number;
+  dataPoints: number;
+}
+
+export interface ErrorMetrics {
+  errorRate: number;
+  warningCount: number;
+  criticalCount: number;
+  dataPoints: number;
+}
+
+export interface SecurityMetrics {
+  threatCount: number;
+  vulnerabilityCount: number;
+  dataPoints: number;
+}
+
+export interface MetricsSummary {
+  performance: PerformanceMetrics;
+  resources: ResourceMetrics;
+  errors: ErrorMetrics;
+  security: SecurityMetrics;
+  timestamp: string;
+}
+
+export interface MetricsThreshold {
+  performance: {
+    responseTime: number;
+    throughput: number;
+    errorRate: number;
   };
-  cpu?: {
-    usage: number;
-    status: 'critical' | 'warning' | 'normal';
-    trend: 'up' | 'down' | 'stable';
-    recommendations: string[];
+  resources: {
+    cpuUsage: number;
+    memoryUsage: number;
+    diskUsage: number;
   };
-  memory?: {
-    usage: number;
-    status: 'critical' | 'warning' | 'normal';
-    trend: 'up' | 'down' | 'stable';
-    recommendations: string[];
+  errors: {
+    errorRate: number;
+    warningCount: number;
+    criticalCount: number;
   };
-  disk?: {
-    usage: number;
-    status: 'critical' | 'warning' | 'normal';
+  security: {
+    threatCount: number;
+    vulnerabilityCount: number;
   };
-  topPaths?: Array<{
-    path: string;
-    count: number;
-    averageResponseTime: number;
-  }>;
 }

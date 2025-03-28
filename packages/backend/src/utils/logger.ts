@@ -1,107 +1,73 @@
-import winston from 'winston';
-import DailyRotateFile from 'winston-daily-rotate-file';
-import path from 'path';
-import fs from 'fs';
+import * as winston from 'winston';
+import * as path from 'path';
+import * as fs from 'fs';
 
-// Create logs directory if it doesn't exist
+// Ensure logs directory exists
 const logsDir = path.join(process.cwd(), 'logs');
-
-export async function initializeLogging(): Promise<void> {
-  try {
-    // Create logs directory if it doesn't exist
-    if (!fs.existsSync(logsDir)) {
-      fs.mkdirSync(logsDir);
-    }
-
-    // Set permissions for logs directory
-    await fs.promises.chmod(logsDir, 0o755);
-    logger.info('Set permissions for logs directory');
-    logger.info('Logs directory setup completed successfully');
-    logger.info('Logging system initialized');
-  } catch (error) {
-    logger.error('Failed to initialize logging system:', error);
-    throw error;
-  }
+if (!fs.existsSync(logsDir)) {
+  fs.mkdirSync(logsDir, { recursive: true });
 }
 
-// Custom format for log files
+// Define log format
 const logFormat = winston.format.combine(
   winston.format.timestamp(),
   winston.format.errors({ stack: true }),
   winston.format.json()
 );
 
-// Create the logger
+// Create logger instance
 export const logger = winston.createLogger({
   level: process.env.LOG_LEVEL || 'info',
   format: logFormat,
   transports: [
-    // Error logs
-    new DailyRotateFile({
-      filename: path.join(logsDir, 'error-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
+    // Console transport
+    new winston.transports.Console({
+      format: winston.format.combine(
+        winston.format.colorize(),
+        winston.format.simple()
+      )
+    }),
+    // File transport for all logs
+    new winston.transports.File({
+      filename: path.join(logsDir, 'combined.log'),
+      maxsize: 5242880, // 5MB
+      maxFiles: 5
+    }),
+    // File transport for error logs
+    new winston.transports.File({
+      filename: path.join(logsDir, 'error.log'),
       level: 'error',
-      maxFiles: '30d', // Keep logs for 30 days
-      maxSize: '20m', // 20MB
-      format: logFormat,
-    }),
-    
-    // Combined logs (info, warn, error)
-    new DailyRotateFile({
-      filename: path.join(logsDir, 'combined-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
-      maxSize: '20m',
-      format: logFormat,
-    }),
-
-    // Auth logs
-    new DailyRotateFile({
-      filename: path.join(logsDir, 'auth-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
-      maxSize: '20m',
-      format: logFormat,
-    }),
-
-    // System metrics logs
-    new DailyRotateFile({
-      filename: path.join(logsDir, 'metrics-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
-      maxSize: '20m',
-      format: logFormat,
-    })
-  ],
-  // Handle uncaught exceptions and rejections
-  exceptionHandlers: [
-    new DailyRotateFile({
-      filename: path.join(logsDir, 'exceptions-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
-      maxSize: '20m',
-      format: logFormat,
-    })
-  ],
-  rejectionHandlers: [
-    new DailyRotateFile({
-      filename: path.join(logsDir, 'rejections-%DATE%.log'),
-      datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d',
-      maxSize: '20m',
-      format: logFormat,
+      maxsize: 5242880, // 5MB
+      maxFiles: 5
     })
   ]
 });
 
-// Add console transport in development
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.combine(
-      winston.format.colorize(),
-      winston.format.simple()
-    )
-  }));
+// Export a function to create a child logger with a specific context
+export const createLogger = (context: string) => {
+  return logger.child({ context });
+};
+
+// Initialize logging system
+export async function initializeLogging(): Promise<void> {
+  try {
+    // Ensure logs directory exists
+    if (!fs.existsSync(logsDir)) {
+      fs.mkdirSync(logsDir, { recursive: true });
+    }
+
+    // Test file write access
+    const testFile = path.join(logsDir, 'test.log');
+    await fs.promises.writeFile(testFile, 'Test log entry\n');
+    await fs.promises.unlink(testFile);
+
+    // Test logging
+    logger.info('Logging system initialized successfully');
+    return Promise.resolve();
+  } catch (error) {
+    logger.error('Failed to initialize logging system:', error);
+    return Promise.reject(error);
+  }
 }
 
 // Custom logging methods for specific categories

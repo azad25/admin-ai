@@ -2,19 +2,6 @@ import jwt from 'jsonwebtoken';
 import { AppError } from '../middleware/errorHandler';
 import { logger } from '../utils/logger';
 
-// Get JWT secret from environment
-const JWT_SECRET = process.env.JWT_SECRET;
-
-// Ensure JWT_SECRET is set
-if (!JWT_SECRET) {
-  const errorMessage = 'JWT_SECRET environment variable is not set';
-  logger.error(errorMessage);
-  throw new Error(errorMessage);
-}
-
-// After validation, we can safely assert JWT_SECRET is a string
-const jwtSecretString: string = JWT_SECRET;
-
 const TOKEN_EXPIRY = '24h'; // Token expiry time
 
 interface TokenPayload {
@@ -29,10 +16,21 @@ interface TokenRefreshError extends AppError {
   refreshToken?: string;
 }
 
+function getJwtSecret(): string {
+  const JWT_SECRET = process.env.JWT_SECRET;
+  if (!JWT_SECRET) {
+    const errorMessage = 'JWT_SECRET environment variable is not set';
+    logger.error(errorMessage);
+    throw new Error(errorMessage);
+  }
+  return JWT_SECRET;
+}
+
 export async function verifyToken(token: string): Promise<TokenPayload> {
   try {
+    const jwtSecret = getJwtSecret();
     // Cast the decoded token to TokenPayload
-    const decoded = jwt.verify(token, jwtSecretString) as unknown as TokenPayload;
+    const decoded = jwt.verify(token, jwtSecret) as unknown as TokenPayload;
     
     // Check if token is about to expire (less than 1 hour remaining)
     const expiresIn = (decoded.exp || 0) - Math.floor(Date.now() / 1000);
@@ -69,5 +67,6 @@ export async function verifyToken(token: string): Promise<TokenPayload> {
 }
 
 export function generateToken(payload: Omit<TokenPayload, 'iat' | 'exp'>): string {
-  return jwt.sign(payload, jwtSecretString, { expiresIn: TOKEN_EXPIRY });
+  const jwtSecret = getJwtSecret();
+  return jwt.sign(payload, jwtSecret, { expiresIn: TOKEN_EXPIRY });
 } 

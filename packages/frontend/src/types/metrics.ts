@@ -1,3 +1,5 @@
+import type { SystemHealth, SystemMetrics } from '@admin-ai/shared/types/metrics';
+
 export interface SystemHealth {
   status: 'healthy' | 'warning' | 'error';
   timestamp: string;
@@ -44,9 +46,11 @@ export interface SystemMetrics {
 }
 
 export interface LogEntry {
+  id: string;
   timestamp: string;
-  level: 'info' | 'warn' | 'error';
+  level: 'error' | 'info' | 'warn' | 'debug';
   message: string;
+  source: string;
   metadata?: Record<string, any>;
 }
 
@@ -194,4 +198,14 @@ export interface SystemPerformance {
     packetsOut: number;
     errors: number;
   };
-} 
+}
+
+export interface FixedErrorItem {
+  type: string;
+  count: number;
+  trend: 'up' | 'down' | 'stable';
+  message?: string;
+  timestamp?: string;
+}
+
+export type { SystemHealth, SystemMetrics }; 

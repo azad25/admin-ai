@@ -1,5 +1,6 @@
 import { jwtDecode, JwtPayload as BaseJwtPayload } from 'jwt-decode';
 import { logger } from '../utils/logger';
+import axios from 'axios';
 
 // Extend the JwtPayload interface to include userId
 interface JwtPayload extends BaseJwtPayload {
@@ -64,6 +65,35 @@ export class AuthService {
     } catch (error) {
       logger.error('Failed to decode token', { error });
       return null;
+    }
+  }
+
+  private setUser(user: any): void {
+    localStorage.setItem('user', JSON.stringify(user));
+  }
+
+  async login(credentials: { username: string; password: string }): Promise<void> {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 1000; // 1 second
+    let retries = 0;
+
+    while (retries < MAX_RETRIES) {
+      try {
+        const response = await axios.post('/api/auth/login', credentials);
+        if (response.data.token) {
+          this.setToken(response.data.token);
+          this.setUser(response.data.user);
+          return;
+        }
+      } catch (error) {
+        retries++;
+        if (retries === MAX_RETRIES) {
+          logger.error('Login failed:', error);
+          throw error;
+        }
+        logger.debug(`Login attempt ${retries} failed, retrying in ${RETRY_DELAY}ms...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+      }
     }
   }
 } 

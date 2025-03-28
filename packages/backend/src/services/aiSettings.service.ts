@@ -173,6 +173,13 @@ export class AISettingsService extends EventEmitter {
 
         // Check for active providers
         await this.checkForActiveProviders();
+        
+        // Try to set up WebSocket listeners if the service was set earlier
+        if (this.wsService) {
+          this.setupWebSocketListeners();
+        } else {
+          logger.warn('No WebSocket service available during initialization');
+        }
 
         // Mark as initialized
         this.initialized = true;
@@ -219,8 +226,15 @@ export class AISettingsService extends EventEmitter {
     }
   }
 
-  public setWebSocketService(wsService: WebSocketService) {
+  public setWebSocketService(wsService: WebSocketService | null) {
     logger.info('Setting WebSocket service');
+    
+    // Handle null wsService
+    if (!wsService) {
+      logger.warn('Null WebSocket service provided - skipping setup');
+      return;
+    }
+    
     this.wsService = wsService;
 
     // Clear any existing intervals
@@ -313,7 +327,7 @@ export class AISettingsService extends EventEmitter {
               }, 100);
             }),
             new Promise<void>((_, reject) => 
-              setTimeout(() => reject(new Error('Service initialization timeout')), this.TIMEOUT_MS)
+              setTimeout(() => reject(new Error('Service initialization timeout')), Math.max(1, this.TIMEOUT_MS))
             )
           ]);
         } catch (error) {
