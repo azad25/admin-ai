@@ -102,10 +102,33 @@ export class WebSocketService {
         });
 
         // Handle user registration
-        socket.on('register_user', (userId: string) => {
+        socket.on('register_user', (data: string | { userId: string }) => {
+          let userId: string;
+          
+          // Handle both string and object formats for better compatibility
+          if (typeof data === 'string') {
+            userId = data;
+          } else if (data && typeof data === 'object' && 'userId' in data) {
+            userId = data.userId;
+          } else {
+            logger.warn(`Invalid user registration data: ${JSON.stringify(data)}`);
+            socket.emit('error', { message: 'Invalid user registration data' });
+            return;
+          }
+          
           if (userId) {
             socket.userId = userId;
-            this.userSockets.set(userId, [socket.id]);
+            
+            // Initialize or get the array of socket IDs for this user
+            if (!this.userSockets.has(userId)) {
+              this.userSockets.set(userId, []);
+            }
+            
+            const userSocketIds = this.userSockets.get(userId)!;
+            if (!userSocketIds.includes(socket.id)) {
+              userSocketIds.push(socket.id);
+            }
+            
             socket.emit('registration_confirmed', {
               status: 'registered',
               userId,
@@ -113,6 +136,9 @@ export class WebSocketService {
               timestamp: new Date().toISOString()
             });
             logger.info(`User ${userId} registered with socket ${socket.id}`);
+            
+            // Send any queued messages for this user
+            this.sendQueuedMessages(userId);
           }
         });
 

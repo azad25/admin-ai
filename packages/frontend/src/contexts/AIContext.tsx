@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { AIService } from '../services/ai.service';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { AIMessage } from '../types/ai';
+import { useAuth } from '../contexts/AuthContext';
 
 interface AIContextType {
   aiService: AIService;
@@ -26,7 +27,18 @@ export const AIProvider: React.FC<{ children: React.ReactNode }> = ({ children }
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const { lastMessage, isConnected } = useWebSocket();
-  const [aiService] = useState(() => new AIService());
+  const [aiService] = useState(() => AIService.getInstance());
+  const { user } = useAuth();
+  const initialized = useRef(false);
+
+  useEffect(() => {
+    if (initialized.current) return;
+    if (!user) return;
+    
+    // Initialize AI service with user ID
+    aiService.initialize(user.id);
+    initialized.current = true;
+  }, [aiService, user]);
 
   useEffect(() => {
     if (lastMessage?.type === 'ai' && lastMessage.data) {

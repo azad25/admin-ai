@@ -1,9 +1,11 @@
-export interface ErrorLog {
-  id: string;
-  timestamp: string;
-  level: 'error' | 'warn' | 'info';
-  message: string;
+import { LogEntry } from './logs';
+
+export interface ErrorLogEntry extends LogEntry {
+  level: 'error';
   stack?: string;
+  code?: string;
+  details?: Record<string, any>;
+  type: string; // Required for backward compatibility
   context?: {
     userId?: string;
     path?: string;
@@ -11,9 +13,14 @@ export interface ErrorLog {
     statusCode?: number;
     [key: string]: any;
   };
-  metadata?: {
-    service?: string;
-    component?: string;
+  metadata: {
+    userId?: string;
+    source?: string;
+    severity: 'high' | 'low' | 'medium';
+    details?: Record<string, any>;
     [key: string]: any;
   };
-} 
+}
+
+// Adding alias for backward compatibility
+export type ErrorLog = ErrorLogEntry; 

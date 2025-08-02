@@ -4,8 +4,9 @@ import { SystemMetricsService } from './systemMetrics.service';
 import { AIService } from './ai.service';
 import { WebSocketService } from './websocket.service';
 import type { AIAnalysis } from '@admin-ai/shared/src/types/ai';
-import type { SystemHealth, SystemMetrics } from '@admin-ai/shared/src/types/metrics';
-import type { ErrorLog } from '@admin-ai/shared/src/types/error';
+import type { SystemHealth } from '@admin-ai/shared/src/types/metrics';
+import type { SystemMetrics } from '../types/metrics';
+import type { ErrorLogEntry } from '../types/logging';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger';
 
@@ -97,9 +98,10 @@ export class MonitoringService extends EventEmitter {
     } catch (error) {
       logger.error('Error updating metrics:', error);
 
-      const errorLog: ErrorLog = {
+      const errorLog: ErrorLogEntry = {
         id: uuidv4(),
         timestamp: new Date().toISOString(),
+        level: 'error',
         type: 'system_error',
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
@@ -120,16 +122,20 @@ export class MonitoringService extends EventEmitter {
       this.webSocketService?.broadcast('error:new', errorLog);
 
       // If this is a high severity error, trigger AI analysis
-      if (errorLog.metadata.severity === 'high' && this.aiService) {
+      if (errorLog.metadata?.severity === 'high' && this.aiService) {
         const [_, metrics] = await this.getSystemStatus();
-        const errorAnalysis = await this.aiService.analyzeMetrics({
+        
+        // Create an object that matches the expected type for analyzeMetrics
+        const metricsData = {
           cpuUsage: metrics?.cpuUsage || 0,
           memoryUsage: metrics?.memoryUsage || 0,
           errorCount: (metrics?.errorCount || 0) + 1,
           totalRequests: metrics?.totalRequests || 0,
           activeUsers: metrics?.activeUsers || 0,
-          ...metrics
-        });
+          severity: 'high'
+        };
+        
+        const errorAnalysis = await this.aiService.analyzeMetrics(metricsData);
 
         if (errorAnalysis && this.webSocketService) {
           this.webSocketService.broadcast('error:analysis', {
@@ -141,12 +147,13 @@ export class MonitoringService extends EventEmitter {
     }
   }
 
-  public async logError(error: ErrorLog) {
+  public async logError(error: ErrorLogEntry) {
     try {
       const recentErrors = await this.getRecentErrors();
-      const errorLog: ErrorLog = {
+      const errorLog: ErrorLogEntry = {
         id: uuidv4(),
         timestamp: new Date().toISOString(),
+        level: 'error',
         type: 'system_error',
         message: error instanceof Error ? error.message : String(error),
         stack: error instanceof Error ? error.stack : undefined,
@@ -166,7 +173,7 @@ export class MonitoringService extends EventEmitter {
       this.webSocketService?.broadcast('error:new', errorLog);
 
       // If this is a high severity error, trigger AI analysis
-      if (errorLog.metadata.severity === 'high' && this.aiService) {
+      if (errorLog.metadata?.severity === 'high' && this.aiService) {
         const errorAnalysis = await this.aiService.analyzeError({
           error: errorLog,
           context: {
@@ -188,8 +195,8 @@ export class MonitoringService extends EventEmitter {
     }
   }
 
-  public async getRecentErrors(): Promise<ErrorLog[]> {
-    const errors = await this.cacheService.get<ErrorLog[]>(CACHE_KEYS.ERROR_LOGS);
+  public async getRecentErrors(): Promise<ErrorLogEntry[]> {
+    const errors = await this.cacheService.get<ErrorLogEntry[]>(CACHE_KEYS.ERROR_LOGS);
     return errors || [];
   }
 

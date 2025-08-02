@@ -73,107 +73,97 @@ export class WebSocketService extends SimpleEventEmitter {
     return this.socket?.id || null;
   }
 
-  public async connect(userId: string): Promise<void> {
-    const now = Date.now();
-    if (now - this.lastConnectionAttempt < this.connectionDebounceTime) {
-      logger.debug('Connection attempt debounced');
+  public connect(userId: string): void {
+    if (!userId) {
+      logger.error('Cannot connect without userId');
       return;
     }
-    this.lastConnectionAttempt = now;
-    
-    // Store the userId even if we don't connect immediately
+
+    // Store userId for reconnection attempts
     this.userId = userId;
     
-    if (this.connectionInProgress || this.connected || this.isConnecting) {
-      logger.debug('WebSocket already connected or connecting, skipping');
+    if (this.socket && this.socket.connected) {
+      logger.info('WebSocket already connected, registering user');
+      this.socket.emit('register_user', userId);
+      this.connected = true;
       return;
     }
+
+    logger.info(`Connecting to WebSocket server with userId: ${userId}...`);
     
-    this.connectionInProgress = true;
-    this.isConnecting = true;
-
     try {
-      if (this.socket && this.connected) {
-        logger.debug('Already connected, skipping connection');
-        this.connectionInProgress = false;
-        this.isConnecting = false;
-        return;
-      }
-
+      // Clean up any existing socket
       if (this.socket) {
-        logger.debug('Socket already exists, disconnecting first');
         this.socket.disconnect();
         this.socket = null;
       }
-
-      // Force reconnection by creating a new socket
-      logger.info('Connecting to WebSocket server:', { url: this.wsUrl, path: this.path });
       
-      // Add a small delay before connecting to ensure any previous connections are fully closed
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Create new socket connection with debug logging
+      logger.debug(`Connecting to: ${this.wsUrl} with path: ${this.path}`);
       
       this.socket = io(this.wsUrl, {
         path: this.path,
+        transports: ['websocket', 'polling'],
         reconnection: true,
-        reconnectionAttempts: 10,
         reconnectionDelay: 1000,
-        reconnectionDelayMax: 5000,
-        timeout: 20000,
-        autoConnect: true,
-        forceNew: true,
-        transports: ['websocket', 'polling'],  // Match backend transports
-        upgrade: true,
-        rememberUpgrade: true
+        reconnectionAttempts: 10,
+        timeout: 10000
       });
 
-      this.setupSocketEventHandlers();
-      
-      // Set a connection timeout
+      // Set connection timeout
       const connectionTimeout = setTimeout(() => {
         if (!this.connected && this.socket) {
-          logger.error('WebSocket connection timeout');
-          this.socket.disconnect();
+          logger.error('WebSocket connection timeout after 10 seconds');
+          if (this.socket) {
+            this.socket.disconnect();
+          }
           this.socket = null;
-          this.connected = false;
-          this.connectionInProgress = false;
-          this.isConnecting = false;
           this.handleConnectionError(new Error('Connection timeout'));
           this.scheduleReconnect();
         }
       }, 10000);
 
-      // Wait for connection to be established
+      // Listen for successful connection
       this.socket.on('connect', () => {
         clearTimeout(connectionTimeout);
-        logger.info('WebSocket connected successfully');
+        logger.info(`WebSocket connected with id: ${this.socket?.id}`);
         this.connected = true;
-        this.connectionInProgress = false;
-        this.isConnecting = false;
-        this.reconnectAttempts = 0;
-        this.initialized = true;
         
-        // Update Redux store
-        store.dispatch(setConnected(true));
-        
-        // Register with the server
-        if (this.userId && this.socket) {
-          logger.info(`Registering user ${this.userId} with WebSocket server`);
-          this.socket.emit('register', this.userId);
+        // Register user with the WebSocket server using the expected format
+        if (this.socket && userId) {
+          logger.info(`Registering user ${userId} with socket ${this.socket.id}`);
+          this.socket.emit('register_user', userId);
         }
         
-        // Start health check
-        this.startHealthCheck();
+        // Set up reconnection handlers
+        this.socket.io.on("reconnect", (attempt) => {
+          logger.info(`Socket reconnected after ${attempt} attempts`);
+          if (this.userId) {
+            this.socket?.emit('register_user', this.userId);
+          }
+        });
         
-        // Call connection established callback if set
+        // Update status and call established callback
+        store.dispatch(setConnected(true));
         if (this.connectionEstablishedCallback) {
           this.connectionEstablishedCallback();
         }
+        
+        // Emit our own connect event
+        this.emit('connect');
       });
+      
+      // Listen for registration confirmation
+      this.socket.on('registration_confirmed', (data) => {
+        logger.info('Registration confirmed by server', data);
+        this.initialized = true;
+        this.connected = true;
+      });
+
+      this.setupSocketEventHandlers();
     } catch (error) {
       logger.error('Error connecting to WebSocket server:', error);
       this.connected = false;
-      this.connectionInProgress = false;
-      this.isConnecting = false;
       this.handleConnectionError(error instanceof Error ? error : new Error(String(error)));
       this.scheduleReconnect();
     }
@@ -537,6 +527,22 @@ export class WebSocketService extends SimpleEventEmitter {
       });
     } else {
       logger.warn('Cannot reconnect without userId');
+    }
+  }
+
+  private getSocketUrl(): string {
+    return `${this.wsUrl}${this.path}`;
+  }
+
+  public sendMessage(event: string, data: any): void {
+    if (this.socket && this.connected) {
+      this.socket.emit(event, data);
+    } else {
+      logger.error('Cannot send message, socket not connected');
+      // Try to connect automatically
+      if (this.userId) {
+        this.connect(this.userId);
+      }
     }
   }
 }

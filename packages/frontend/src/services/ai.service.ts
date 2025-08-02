@@ -14,15 +14,20 @@ import {
   addMessage,
   setError,
   setProviders,
-  clearMessages
+  clearMessages,
+  setLoading
 } from '../store/slices/aiSlice';
+import { getWebSocketService } from './websocket.service';
+import { SimpleEventEmitter } from './SimpleEventEmitter';
 
-export class AIService extends EventEmitter {
+export class AIService extends SimpleEventEmitter {
   private static instance: AIService | null = null;
   private isInitialized: boolean = false;
   private isProcessing: boolean = false;
   private messageQueue: AIMessage[] = [];
   private baseUrl: string;
+  private wsService = getWebSocketService();
+  private userId: string = '';
 
   private constructor() {
     super();
@@ -110,35 +115,170 @@ export class AIService extends EventEmitter {
     }
   }
 
-  public async sendMessage(content: string): Promise<void> {
-    if (!wsService.isConnected()) {
-      throw new Error('WebSocket not connected');
-    }
-
-    const timestamp = new Date().toISOString();
-    const message: AIMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content,
-      timestamp,
-      metadata: {
-        type: 'chat',
-        source: {
-          page: 'AI Chat',
-          controller: 'AIService',
-          action: 'sendMessage'
+  public async sendMessageHttp(content: string): Promise<void> {
+    try {
+      const response = await fetch('/api/ai/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
         },
-        timestamp,
-        read: false
+        body: JSON.stringify({ content })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`);
+      }
+    } catch (error) {
+      logger.error('Failed to send message via HTTP:', error);
+      throw error;
+    }
+  }
+
+  public initialize(userId: string): void {
+    if (this.isInitialized) return;
+    
+    this.userId = userId;
+    this.isInitialized = true;
+    
+    logger.info('AI Service initialized with user ID:', userId);
+
+    // Connect to WebSocket with user ID
+    if (userId) {
+      this.wsService.connect(userId);
+      
+      // Set up event listener for WebSocket reconnection
+      this.wsService.on('connect', () => {
+        logger.info('WebSocket reconnected, re-registering user');
+        if (this.userId) {
+          this.wsService.emit('register_user', this.userId);
+        }
+      });
+    } else {
+      logger.warn('Cannot initialize AI service without user ID');
+    }
+  }
+
+  public sendMessage(message: string): Promise<void> {
+    return new Promise(async (resolve, reject) => {
+      try {
+        if (!this.userId) {
+          const auth = localStorage.getItem('auth');
+          if (auth) {
+            try {
+              const authData = JSON.parse(auth);
+              if (authData.user && authData.user.id) {
+                this.userId = authData.user.id;
+                logger.info('Retrieved user ID from auth storage:', this.userId);
+              }
+            } catch (e) {
+              logger.error('Failed to parse auth data:', e);
+            }
+          }
+          
+          if (!this.userId) {
+            logger.error('No user ID available, cannot send message');
+            reject(new Error('No user ID available'));
+            return;
+          }
+        }
+
+        // Make sure WebSocket is connected
+        if (!this.wsService.isConnected() && this.userId) {
+          logger.info('WebSocket not connected, attempting to connect with user ID:', this.userId);
+          this.wsService.connect(this.userId);
+          
+          // Wait for connection to establish
+          const connectionTimeout = setTimeout(() => {
+            logger.warn('WebSocket connection timeout, falling back to HTTP');
+            this.sendMessageHTTP(message).then(resolve).catch(reject);
+          }, 3000);
+          
+          this.wsService.once('connect', () => {
+            clearTimeout(connectionTimeout);
+            // Continue with WebSocket messaging after connection
+            this.sendMessageWebSocket(message).then(resolve).catch(reject);
+          });
+          
+          return;
+        }
+
+        // If already connected, send immediately
+        if (this.wsService.isConnected()) {
+          await this.sendMessageWebSocket(message);
+        } else {
+          // Fallback to HTTP
+          await this.sendMessageHTTP(message);
+        }
+        
+        resolve();
+      } catch (error) {
+        logger.error('Error sending message:', error);
+        reject(error);
+      }
+    });
+  }
+  
+  private async sendMessageWebSocket(content: string): Promise<void> {
+    logger.info('Sending message via WebSocket');
+    this.wsService.emit('message', { content });
+    
+    // Add to our local store
+    const message: AIMessage = {
+      id: Date.now().toString(),
+      content,
+      role: 'user',
+      timestamp: new Date().toISOString(),
+      metadata: {
+        timestamp: new Date().toISOString(),
+        category: 'chat',
+        type: 'chat'
       }
     };
-
-    this.messageQueue.push(message);
+    
     store.dispatch(addMessage(message));
-    this.emit('message', message);
-
-    if (!this.isProcessing) {
-      await this.processNextMessage();
+  }
+  
+  private async sendMessageHTTP(content: string): Promise<void> {
+    logger.info('Sending message via HTTP fallback');
+    try {
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token available');
+      }
+      
+      const response = await fetch('/api/ai/message', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ content })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error ${response.status}`);
+      }
+      
+      // Add to our local store even without response
+      const message: AIMessage = {
+        id: Date.now().toString(),
+        content,
+        role: 'user',
+        timestamp: new Date().toISOString(),
+        metadata: {
+          timestamp: new Date().toISOString(),
+          category: 'chat',
+          type: 'chat'
+        }
+      };
+      
+      store.dispatch(addMessage(message));
+      
+      logger.info('Message sent via HTTP');
+    } catch (error) {
+      logger.error('Failed to send message via HTTP:', error);
+      throw error;
     }
   }
 

@@ -49,7 +49,7 @@ export interface LogEntry {
   metadata?: Record<string, any>;
 }
 
-export interface ErrorLog extends LogEntry {
+export interface ErrorLogEntry extends LogEntry {
   level: 'error';
   stack?: string;
   code?: string;

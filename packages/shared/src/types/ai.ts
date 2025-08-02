@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { LLMProvider } from './common.js';
-import { SystemHealth, SystemMetrics } from './metrics';
+import { SystemHealth } from './metrics';
 
 export type { LLMProvider };
 

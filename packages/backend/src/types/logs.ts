@@ -6,12 +6,15 @@ export interface LogEntry {
   metadata?: Record<string, any>;
 }
 
-export interface ErrorLog extends LogEntry {
+export interface ErrorLogEntry extends LogEntry {
   level: 'error';
   stack?: string;
   code?: string;
   details?: Record<string, any>;
 }
+
+// Alias for backward compatibility
+export type ErrorLog = ErrorLogEntry;
 
 export interface SecurityEvent {
   id: string;
