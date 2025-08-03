@@ -1,7 +1,7 @@
 # AdminAI
 
 AdminAI is a modern, AI-powered administration dashboard that combines powerful backend services with an intuitive frontend interface. Built with TypeScript, React, and Node.js, it provides real-time monitoring, analytics, and AI-assisted system management capabilities.
-
+![](preview.gif)
 ## Features
 
 - 🤖 AI-powered system analysis and recommendations
